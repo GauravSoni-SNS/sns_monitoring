@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SNS Endpoint Security — Local Admin</title>
+<style>
+  :root { --bg:#0f1420; --panel:#171e2e; --line:#26304a; --fg:#dbe4f5; --muted:#8b98b5; --accent:#4f8cff; --bad:#ff5d6c; --ok:#39d98a; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.5 system-ui,Segoe UI,sans-serif; background:var(--bg); color:var(--fg); }
+  header { padding:14px 20px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:16px; }
+  header b { font-size:16px; } .muted { color:var(--muted); }
+  #login { max-width:360px; margin:12vh auto; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:24px; }
+  input,button { font:inherit; padding:9px 12px; border-radius:8px; border:1px solid var(--line); background:#0d1320; color:var(--fg); }
+  button { background:var(--accent); border-color:var(--accent); color:#fff; cursor:pointer; }
+  button.secondary { background:transparent; color:var(--fg); }
+  #app { display:none; }
+  nav { display:flex; flex-wrap:wrap; gap:6px; padding:10px 20px; border-bottom:1px solid var(--line); }
+  nav a { padding:6px 10px; border-radius:7px; cursor:pointer; color:var(--muted); }
+  nav a.active { background:var(--panel); color:var(--fg); }
+  main { padding:20px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:12px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px; }
+  .card h4 { margin:0 0 6px; color:var(--muted); font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+  .card .v { font-size:18px; }
+  table { width:100%; border-collapse:collapse; }
+  th,td { text-align:left; padding:7px 10px; border-bottom:1px solid var(--line); font-variant-numeric:tabular-nums; }
+  th { color:var(--muted); font-weight:600; position:sticky; top:0; background:var(--bg); }
+  .pill { padding:2px 8px; border-radius:20px; font-size:12px; background:#0d1320; border:1px solid var(--line); }
+  .thumbs { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:10px; }
+  .thumb { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:8px; cursor:pointer; font-size:12px; }
+  #viewer { position:fixed; inset:0; background:rgba(0,0,0,.85); display:none; align-items:center; justify-content:center; flex-direction:column; gap:10px; }
+  #viewer img { max-width:92vw; max-height:82vh; border:1px solid var(--line); border-radius:6px; }
+  .ok { color:var(--ok); } .bad { color:var(--bad); }
+  .err { color:var(--bad); margin-top:8px; }
+  code { color:var(--muted); }
+</style>
+</head>
+<body>
+<div id="login">
+  <h2 style="margin-top:0">SNS Endpoint Security</h2>
+  <p class="muted">Authorized local administrator only.</p>
+  <div style="display:flex; gap:8px">
+    <input id="pw" type="password" placeholder="Admin password" style="flex:1" autocomplete="current-password">
+    <button onclick="doLogin()">Sign in</button>
+  </div>
+  <div id="loginErr" class="err"></div>
+</div>
+
+<div id="app">
+  <header>
+    <b>SNS Endpoint Security</b>
+    <span class="muted" id="hdrDevice"></span>
+    <span style="flex:1"></span>
+    <button class="secondary" onclick="doLogout()">Sign out</button>
+  </header>
+  <nav id="nav"></nav>
+  <main id="view"></main>
+</div>
+
+<div id="viewer" onclick="this.style.display='none'">
+  <div id="viewerMsg" class="muted"></div>
+  <img id="viewerImg" alt="">
+  <div class="muted">click anywhere to close</div>
+</div>
+
+<script>
+let CSRF = null;
+const SECTIONS = ["Dashboard","Timeline","Browser","Screenshots","System Events","Storage","Health","Configuration","Audit Log","Integrity"];
+
+async function api(path, opts) {
+  const r = await fetch(path, Object.assign({ headers:{'Content-Type':'application/json'} }, opts));
+  if (r.status === 401) { showLogin(); throw new Error('unauthorized'); }
+  return r;
+}
+function esc(s){ return (s==null?'':String(s)).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+function showLogin(){ document.getElementById('app').style.display='none'; document.getElementById('login').style.display='block'; }
+
+async function doLogin() {
+  const pw = document.getElementById('pw').value;
+  const r = await fetch('/api/login', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({password:pw}) });
+  const j = await r.json().catch(()=>({}));
+  if (!r.ok) { document.getElementById('loginErr').textContent = j.error || 'login failed'; return; }
+  CSRF = j.csrf;
+  document.getElementById('login').style.display='none';
+  document.getElementById('app').style.display='block';
+  buildNav(); loadDevice(); go('Dashboard');
+}
+async function doLogout(){ await fetch('/api/logout',{method:'POST'}); CSRF=null; showLogin(); }
+
+function buildNav(){
+  const nav = document.getElementById('nav'); nav.innerHTML='';
+  SECTIONS.forEach(s => { const a=document.createElement('a'); a.textContent=s; a.onclick=()=>go(s); a.dataset.s=s; nav.appendChild(a); });
+}
+function setActive(s){ document.querySelectorAll('#nav a').forEach(a=>a.classList.toggle('active', a.dataset.s===s)); }
+
+async function loadDevice(){
+  try { const d = await (await api('/api/device')).json();
+    const dev = d.device||{}; document.getElementById('hdrDevice').textContent = (dev.system_name||'?')+'  ·  '+(dev.device_id||''); } catch(e){}
+}
+
+async function go(section){
+  setActive(section); const v = document.getElementById('view'); v.innerHTML = '<span class="muted">loading…</span>';
+  try {
+    if (section==='Dashboard') return renderDashboard(v);
+    if (section==='Timeline') return renderTable(v, await j('/api/timeline'), ['timestamp_utc','event_type','application_name','window_title']);
+    if (section==='Browser') return renderTable(v, await j('/api/browser'), ['timestamp_utc','application_name','window_title']);
+    if (section==='System Events') return renderTable(v, await j('/api/system-events'), ['timestamp_utc','event_type','metadata_json']);
+    if (section==='Screenshots') return renderScreenshots(v, await j('/api/screenshots'));
+    if (section==='Storage') return renderStorage(v, await j('/api/storage'));
+    if (section==='Health') return renderKV(v, await j('/api/health'));
+    if (section==='Configuration') return renderPre(v, await j('/api/config'));
+    if (section==='Audit Log') return renderTable(v, await j('/api/audit'), ['timestamp_utc','action','actor','metadata_json']);
+    if (section==='Integrity') return renderIntegrity(v);
+  } catch(e){ v.innerHTML = '<span class="err">'+esc(e.message)+'</span>'; }
+}
+async function j(p){ return await (await api(p)).json(); }
+
+async function renderDashboard(v){
+  const d = await j('/api/device'); const dev=d.device||{}; const h=d.health||{};
+  const cards = [
+    ['System Name', dev.system_name], ['Device ID', dev.device_id], ['Hostname', dev.hostname],
+    ['OS Version', dev.os_version], ['Agent Version', dev.agent_version||h.agent_version],
+    ['Agent Status', h.agent_status], ['Database', h.database], ['Encryption', h.encryption],
+    ['Storage', h.storage_used_bytes!=null ? (mb(h.storage_used_bytes)+' / '+mb(h.storage_max_bytes)) : '—'],
+    ['Last Event', h.last_event_utc], ['Last Screenshot', h.last_screenshot_utc],
+    ['Integrity', h.last_integrity_pass==null?'—':(h.last_integrity_pass?'PASS':'FAIL')],
+  ];
+  v.innerHTML = '<div class="grid">'+cards.map(([k,val])=>`<div class="card"><h4>${esc(k)}</h4><div class="v">${esc(val==null?'—':val)}</div></div>`).join('')+'</div>';
+}
+function mb(b){ return (b/1073741824).toFixed(2)+' GB'; }
+
+function renderTable(v, rows, cols){
+  if(!Array.isArray(rows)||!rows.length){ v.innerHTML='<span class="muted">no records</span>'; return; }
+  v.innerHTML = '<table><thead><tr>'+cols.map(c=>`<th>${esc(c)}</th>`).join('')+'</tr></thead><tbody>'+
+    rows.map(r=>'<tr>'+cols.map(c=>`<td>${esc(r[c])}</td>`).join('')+'</tr>').join('')+'</tbody></table>';
+}
+function renderScreenshots(v, rows){
+  if(!rows.length){ v.innerHTML='<span class="muted">no screenshots</span>'; return; }
+  v.innerHTML = '<div class="thumbs">'+rows.map(r=>
+    `<div class="thumb" onclick="viewShot('${esc(r.screenshot_id)}')"><b>${esc(r.timestamp_utc)}</b><br><code>${esc(r.screenshot_id)}</code><br>${(r.file_size/1024|0)} KB · SHA ${esc((r.sha256||'').slice(0,10))}…</div>`
+  ).join('')+'</div>';
+}
+async function viewShot(id){
+  const box=document.getElementById('viewer'), img=document.getElementById('viewerImg'), msg=document.getElementById('viewerMsg');
+  msg.textContent='decrypting…'; img.src=''; box.style.display='flex';
+  const r = await api('/api/screenshots/'+id+'/image');
+  if(!r.ok){ const j=await r.json().catch(()=>({})); msg.innerHTML='<span class="bad">'+esc(j.error||'error')+'</span>'; return; }
+  const blob = await r.blob(); img.src = URL.createObjectURL(blob); msg.textContent = id;
+}
+function renderStorage(v, d){
+  const p=d.policy||{}; const st=p.storage||{};
+  v.innerHTML = `<div class="grid">
+    <div class="card"><h4>Used</h4><div class="v">${mb(d.used_bytes||0)}</div></div>
+    <div class="card"><h4>Max</h4><div class="v">${mb(st.max_bytes||0)}</div></div>
+    <div class="card"><h4>Warn / Critical</h4><div class="v">${esc(st.warn_pct)}% / ${esc(st.critical_pct)}%</div></div>
+    <div class="card"><h4>Retention</h4><div class="v">${esc((p.retention||{}).screenshot_days)}d shots · ${esc((p.retention||{}).event_days)}d events</div></div>
+  </div>`;
+}
+function renderKV(v, obj){
+  if(!obj){ v.innerHTML='<span class="muted">no health snapshot yet</span>'; return; }
+  v.innerHTML='<div class="grid">'+Object.entries(obj).map(([k,val])=>`<div class="card"><h4>${esc(k)}</h4><div class="v">${esc(val==null?'—':val)}</div></div>`).join('')+'</div>';
+}
+function renderPre(v, obj){ v.innerHTML='<pre class="card" style="overflow:auto">'+esc(JSON.stringify(obj,null,2))+'</pre>'; }
+function renderIntegrity(v){
+  v.innerHTML='<button onclick="runIntegrity()">Run integrity verification</button><div id="intOut" style="margin-top:14px"></div>';
+}
+async function runIntegrity(){
+  const out=document.getElementById('intOut'); out.textContent='verifying…';
+  const r = await api('/api/integrity/verify',{method:'POST',body:JSON.stringify({csrf:CSRF})});
+  const j = await r.json();
+  if(!r.ok){ out.innerHTML='<span class="bad">'+esc(j.error||'error')+'</span>'; return; }
+  out.innerHTML = `<div class="grid">
+    <div class="card"><h4>Events checked</h4><div class="v">${j.events_checked}</div></div>
+    <div class="card"><h4>Invalid records</h4><div class="v">${j.invalid_records}</div></div>
+    <div class="card"><h4>Result</h4><div class="v ${j.pass?'ok':'bad'}">${j.pass?'PASS':'FAIL'}</div></div>
+  </div>`;
+}
+document.getElementById('pw').addEventListener('keydown',e=>{ if(e.key==='Enter') doLogin(); });
+</script>
+</body>
+</html>

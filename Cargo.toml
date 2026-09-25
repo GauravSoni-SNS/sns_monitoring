@@ -1,0 +1,51 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/sns-shared",
+    "crates/sns-core",
+    "crates/sns-service",
+    "crates/sns-useragent",
+    "crates/sns-agentctl",
+    "crates/sns-admin",
+]
+
+[workspace.package]
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.75"
+license = "Proprietary"
+authors = ["SNS Engineering"]
+
+[workspace.dependencies]
+# serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# ids / time / hashing
+ulid = "1"
+time = { version = "0.3", features = ["formatting", "parsing", "macros"] }
+sha2 = "0.10"
+hex = "0.4"
+# crypto
+aes-gcm = "0.10"
+rand = "0.8"
+argon2 = "0.5"
+zeroize = { version = "1", features = ["derive"] }
+# storage
+rusqlite = { version = "0.31", features = ["bundled"] }
+# async
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
+# errors / logging
+thiserror = "1"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+# Keep default unwind: the supervisor isolates a panicking collector (spec §42) via
+# task-join / catch_unwind and restarts it. FFI edges (service control handler) catch
+# panics locally so no unwind crosses the C boundary.
+strip = true

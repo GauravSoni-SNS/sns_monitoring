@@ -1,0 +1,29 @@
+[package]
+name = "sns-service"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "sns-service"
+path = "src/main.rs"
+
+[dependencies]
+sns-shared = { path = "../sns-shared" }
+sns-core = { path = "../sns-core" }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tracing-appender.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+# SCM integration: registers/dispatches the Windows Service (spec §2, §3, §6).
+windows-service = "0.7"
+
+[dev-dependencies]
+sns-shared = { path = "../sns-shared" }
+tempfile = "3"

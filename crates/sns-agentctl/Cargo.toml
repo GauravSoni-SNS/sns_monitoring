@@ -1,0 +1,17 @@
+[package]
+name = "sns-agentctl"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "sns-agentctl"
+path = "src/main.rs"
+
+[dependencies]
+sns-shared = { path = "../sns-shared" }
+sns-core = { path = "../sns-core" }
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true

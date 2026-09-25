@@ -1,0 +1,167 @@
+//! `sns-useragent` — the user-session collector (session-0-isolation companion to the
+//! service). Runs inside the interactive desktop session (started at logon), where the
+//! screen, foreground window, and browser are actually reachable. It captures and writes
+//! records to the service's drop box (`runtime/incoming/`); the session-0 service ingests
+//! them into SQLite. See docs/SCREENSHOT.md and docs/SERVICE-LIFECYCLE.md.
+//!
+//! It never writes to SQLite directly (single-writer = the service). It uses the same
+//! machine-DPAPI-wrapped DEK (LocalMachine scope is readable from the user session), so
+//! screenshots are encrypted before they ever leave this process.
+//!
+//! This is NOT covert: it is a named, installed component launched by a visible scheduled
+//! task, writing only to the agent's own ACL-protected directory.
+//
+// Release builds run windowless (GUI subsystem) so no blank console appears at logon — it
+// is a background agent and logs to a file, not a console. Debug builds keep the console so
+// developers still see stderr/`Error:` output when running it by hand.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use sns_core::collectors::application::{self, ApplicationCollector};
+use sns_core::collectors::browser::{BrowserCollector, Granularity};
+use sns_core::collectors::screenshot;
+use sns_core::config::{AgentConfig, Policy};
+use sns_core::security::KeyManager;
+use sns_core::storage::dropbox::{self, DropRecord};
+
+fn data_root() -> PathBuf {
+    std::env::var_os("SNS_DATA_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(sns_core::DEFAULT_DATA_ROOT))
+}
+
+fn main() -> anyhow::Result<()> {
+    let root = data_root();
+    init_logging(&root);
+
+    // Only one capture agent per machine — a second (duplicate task fire / manual overlap)
+    // exits immediately so we never double-capture.
+    // Session-scoped ("Local\") so a standard user can create it (the "Global\" namespace
+    // needs SeCreateGlobalPrivilege, which limited users lack). One agent per session is the
+    // correct scope anyway — fast-user-switching gives each user their own capture.
+    let _singleton = match sns_core::singleton::acquire("Local\\SNSSecurityCaptureAgent") {
+        Some(g) => g,
+        None => {
+            tracing::info!("another capture agent is already running; exiting");
+            return Ok(());
+        }
+    };
+
+    let cfg = AgentConfig::load(root.join("config").join("agent.json"))?;
+    let policy = Policy::load(root.join("config").join("policy.json"))?;
+    let keys = KeyManager::load(root.join("keys").join("keyring.json"))?;
+
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async {
+        let sig = shutdown.clone();
+        tokio::spawn(async move {
+            let _ = tokio::signal::ctrl_c().await;
+            sig.store(true, Ordering::Relaxed);
+        });
+
+        let interval = Duration::from_secs(policy.screenshot.interval_seconds.max(1));
+        let mut last_shot: Option<Instant> = None;
+
+        // Interactive collectors run here, in the user session (spec §13, §14).
+        let mut app = ApplicationCollector::new(&cfg.device_id, policy.application.capture_window_title);
+        let granularity = if policy.browser.granularity == "url" { Granularity::Url } else { Granularity::Domain };
+        let browser = BrowserCollector::new(&cfg.device_id, granularity);
+
+        tracing::info!(device = %cfg.device_id, "user-session agent started");
+        while !shutdown.load(Ordering::Relaxed) {
+            // Foreground application (and browser, if the foreground is a browser).
+            if policy.application.enabled {
+                sample_apps(&root, &policy, &mut app, &browser);
+            }
+
+            // Screenshots on the configured interval.
+            if policy.screenshot.enabled {
+                let due = last_shot.map(|t| t.elapsed() >= interval).unwrap_or(true);
+                if due {
+                    if let Err(e) = capture_once(&root, &cfg, &policy, &keys) {
+                        tracing::warn!(error = %e, "screenshot capture failed");
+                    }
+                    last_shot = Some(Instant::now());
+                }
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+        tracing::info!("user-session agent stopping");
+        anyhow::Ok(())
+    })
+}
+
+/// Sample the foreground window; on a focus/title change emit ACTIVE_APPLICATION_CHANGED,
+/// and if the foreground process is a browser also emit BROWSER_ACTIVITY (domain/title).
+/// Only records process name + window caption — never keystrokes/clipboard/passwords.
+fn sample_apps(
+    root: &std::path::Path,
+    policy: &Policy,
+    app: &mut ApplicationCollector,
+    browser: &BrowserCollector,
+) {
+    let Some(sample) = application::foreground_sample() else { return };
+    let browser_name = application::is_browser_process(&sample.process_name);
+    let title = sample.window_title.clone();
+
+    let events = app.on_sample(sample);
+    let changed = !events.is_empty();
+    for ev in events {
+        let stem = ev.event_id.clone();
+        if let Err(e) = dropbox::write_record(root, &stem, &DropRecord::Activity(ev)) {
+            tracing::warn!(error = %e, "failed to drop activity record");
+        }
+    }
+
+    // Emit a browser-activity record only on an actual change (tab/window switch changes
+    // the caption), to avoid per-second spam.
+    if changed && policy.browser.enabled {
+        if let (Some(bname), Some(t)) = (browser_name, title) {
+            let ev = browser.build_event(bname, &t);
+            let stem = ev.event_id.clone();
+            if let Err(e) = dropbox::write_record(root, &stem, &DropRecord::Activity(ev)) {
+                tracing::warn!(error = %e, "failed to drop browser record");
+            }
+        }
+    }
+}
+
+/// Capture each authorized monitor, encrypt+store the file, and drop a manifest for the
+/// service to ingest. Skips silently if the capture backend yields no frame.
+fn capture_once(
+    root: &std::path::Path,
+    cfg: &AgentConfig,
+    policy: &Policy,
+    keys: &KeyManager,
+) -> anyhow::Result<()> {
+    // Phase 1 captures the primary display; multi-monitor enumeration is a DXGI refinement.
+    for monitor_id in [0u32] {
+        let png = screenshot::capture_monitor(monitor_id, policy.screenshot.max_dimension)?;
+        if png.is_empty() {
+            continue;
+        }
+        let meta = screenshot::persist_capture(root, keys.data_key(), &cfg.device_id, Some(monitor_id), &png)?;
+        let stem = meta.screenshot_id.clone();
+        dropbox::write_record(root, &stem, &DropRecord::Screenshot(meta))?;
+        tracing::info!(id = %stem, "captured + dropped screenshot manifest");
+    }
+    Ok(())
+}
+
+fn init_logging(root: &std::path::Path) {
+    let logs = root.join("logs");
+    let _ = std::fs::create_dir_all(&logs);
+    let file = tracing_appender::rolling::daily(&logs, "useragent.log");
+    let _ = tracing_subscriber::fmt()
+        .with_writer(file)
+        .with_ansi(false)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_env("SNS_LOG").unwrap_or_else(|_| "info".into()),
+        )
+        .try_init();
+}

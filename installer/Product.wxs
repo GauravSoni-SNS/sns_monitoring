@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SNS Endpoint Security — WiX MSI skeleton (spec §38, §40).
+  Signed MSI + signed binaries in production. Custom actions call sns-agentctl init and the
+  ACL/service steps from install.ps1. This is a reference skeleton; component GUIDs and the
+  full file harvest are generated at packaging time (heat.exe).
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*" Name="SNS Endpoint Security Agent" Language="1033" Version="1.0.0"
+           Manufacturer="SNS" UpgradeCode="PUT-STABLE-GUID-HERE">
+    <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine"
+             Description="Authorized enterprise endpoint activity/security agent" />
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- Public property for silent/MDM install: SYSTEM_NAME + ADMIN_PASSWORD (spec §10, §38). -->
+    <Property Id="SYSTEM_NAME" Secure="yes" />
+    <Property Id="ADMIN_PASSWORD" Secure="yes" Hidden="yes" />
+
+    <Feature Id="MainFeature" Title="SNS Security Agent" Level="1">
+      <ComponentGroupRef Id="BinaryComponents" />
+    </Feature>
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="SNSDir" Name="SNS">
+          <Directory Id="INSTALLDIR" Name="SecurityAgent" />
+        </Directory>
+      </Directory>
+    </Directory>
+
+    <!--
+      Sequenced custom actions (deferred, run as LocalSystem):
+        1. CreateDataDirs + ApplyAcls  (install.ps1 steps 2-3)
+        2. InitAgent                   (sns-agentctl init: device_id, keys, config, db)
+        3. InstallService + Recovery   (sc.exe create / failure)
+        4. StartService + HealthCheck
+      On uninstall: StopService (graceful) -> DeleteService -> per-policy data handling.
+      See installer/install.ps1 / uninstall.ps1 for the exact commands.
+    -->
+  </Product>
+</Wix>
