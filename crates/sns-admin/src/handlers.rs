@@ -122,27 +122,47 @@ fn read_health(state: &AppState) -> Option<serde_json::Value> {
     serde_json::from_slice(&raw).ok()
 }
 
-pub async fn timeline(State(state): State<AppState>, headers: HeaderMap) -> Response {
+#[derive(Deserialize)]
+pub struct RangeQuery {
+    /// UTC ISO lower bound (inclusive).
+    from: Option<String>,
+    /// UTC ISO upper bound (exclusive).
+    to: Option<String>,
+}
+
+pub async fn timeline(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Query(q): axum::extract::Query<RangeQuery>,
+) -> Response {
     if let Err(r) = require_auth(&state, &headers) {
         return r;
     }
-    match db(&state).and_then(|s| s.recent_activity(300).map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))) {
+    match db(&state).and_then(|s| s.recent_activity(500, q.from.as_deref(), q.to.as_deref()).map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))) {
         Ok(rows) => Json(rows).into_response(),
         Err(r) => r,
     }
 }
 
-pub async fn browser(State(state): State<AppState>, headers: HeaderMap) -> Response {
+pub async fn browser(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Query(q): axum::extract::Query<RangeQuery>,
+) -> Response {
     if let Err(r) = require_auth(&state, &headers) {
         return r;
     }
-    match db(&state).and_then(|s| s.recent_browser(300).map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))) {
+    match db(&state).and_then(|s| s.recent_browser(500, q.from.as_deref(), q.to.as_deref()).map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))) {
         Ok(rows) => Json(rows).into_response(),
         Err(r) => r,
     }
 }
 
-pub async fn system_events(State(state): State<AppState>, headers: HeaderMap) -> Response {
+pub async fn system_events(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Query(q): axum::extract::Query<RangeQuery>,
+) -> Response {
     if let Err(r) = require_auth(&state, &headers) {
         return r;
     }
@@ -151,7 +171,7 @@ pub async fn system_events(State(state): State<AppState>, headers: HeaderMap) ->
                  "USER_SESSION_STARTED", "USER_SESSION_ENDED", "USB_DEVICE_CONNECTED",
                  "USB_DEVICE_DISCONNECTED", "STORAGE_WARNING", "STORAGE_CRITICAL",
                  "INTEGRITY_FAILURE", "CONFIGURATION_CHANGED"];
-    match db(&state).and_then(|s| s.recent_activity(300).map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))) {
+    match db(&state).and_then(|s| s.recent_activity(800, q.from.as_deref(), q.to.as_deref()).map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))) {
         Ok(rows) => {
             let filtered: Vec<_> = rows.into_iter().filter(|r| types.contains(&r.event_type.as_str())).collect();
             Json(filtered).into_response()

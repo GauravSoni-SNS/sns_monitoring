@@ -196,6 +196,23 @@ td.mono, .mono { font-family: "Cascadia Code", Consolas, ui-monospace, monospace
 .toolbar input { max-width: 300px; }
 .muted { color: var(--muted); }
 
+/* date-range filter bar */
+.toolbar.filters {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+  padding: 10px 12px; box-shadow: var(--shadow); align-items: flex-end;
+}
+.date-field { display: flex; flex-direction: column; gap: 3px; }
+.date-field label { font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); font-weight: 700; }
+.date-field input[type="date"] { padding: 7px 10px; border-radius: 8px; width: 150px; color-scheme: light; }
+.btn.sm { padding: 7px 12px; font-size: 12.5px; border-radius: 8px; }
+.toolbar .grow { flex: 1 1 180px; max-width: none; }
+.toolbar.filters .muted { margin-left: auto; align-self: center; font-variant-numeric: tabular-nums; }
+
+/* modern polish */
+.card, .status-badge, .metric, .tablewrap, .device-hero { transition: box-shadow .15s ease, transform .15s ease, border-color .15s ease; }
+.metric:hover { border-color: var(--cherry); }
+tbody tr { transition: background .1s ease; }
+
 /* ---------- info button (i) ---------- */
 .info-btn {
   width: 24px; height: 24px; border-radius: 50%; border: 1px solid var(--line);

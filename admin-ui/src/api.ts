@@ -50,6 +50,18 @@ export type AuditRow = {
 
 export type UsageItem = { name: string; seconds: number; sessions: number };
 
+/** UTC ISO bounds for a date-range query. */
+export type Range = { from?: string; to?: string };
+
+function qs(o?: Range): string {
+  if (!o) return "";
+  const p = new URLSearchParams();
+  if (o.from) p.set("from", o.from);
+  if (o.to) p.set("to", o.to);
+  const s = p.toString();
+  return s ? `?${s}` : "";
+}
+
 let csrf: string | null = null;
 
 async function req(path: string, init?: RequestInit): Promise<Response> {
@@ -87,9 +99,9 @@ export const api = {
   },
   device: () => json<{ device: Device | null; health: Health | null }>("/api/device"),
   health: () => json<Health>("/api/health"),
-  timeline: () => json<ActivityRow[]>("/api/timeline"),
-  browser: () => json<ActivityRow[]>("/api/browser"),
-  systemEvents: () => json<ActivityRow[]>("/api/system-events"),
+  timeline: (o?: Range) => json<ActivityRow[]>(`/api/timeline${qs(o)}`),
+  browser: (o?: Range) => json<ActivityRow[]>(`/api/browser${qs(o)}`),
+  systemEvents: (o?: Range) => json<ActivityRow[]>(`/api/system-events${qs(o)}`),
   screenshots: () => json<ScreenshotRow[]>("/api/screenshots"),
   audit: () => json<AuditRow[]>("/api/audit"),
   storage: () => json<{ used_bytes: number; policy: any }>("/api/storage"),
@@ -123,8 +135,34 @@ export function fmtDuration(sec: number): string {
   return `${sec}s`;
 }
 
+// All timestamps are stored UTC; the UI shows them in India Standard Time (IST, UTC+5:30).
+const IST = "Asia/Kolkata";
+
 export function fmtTime(iso?: string | null): string {
   if (!iso) return "—";
   const d = new Date(iso);
-  return isNaN(d.getTime()) ? iso : d.toLocaleString();
+  if (isNaN(d.getTime())) return iso;
+  return d.toLocaleString("en-IN", {
+    timeZone: IST, year: "numeric", month: "short", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true,
+  }) + " IST";
+}
+
+/** Convert an IST calendar range (date inputs, YYYY-MM-DD) to UTC ISO bounds:
+ *  from = IST 00:00 of `fromDate`; to = IST 00:00 of the day AFTER `toDate` (exclusive). */
+export function istRangeToUtc(fromDate?: string, toDate?: string): Range {
+  const r: Range = {};
+  if (fromDate) r.from = new Date(`${fromDate}T00:00:00+05:30`).toISOString();
+  if (toDate) {
+    const end = new Date(`${toDate}T00:00:00+05:30`);
+    end.setDate(end.getDate() + 1); // include the whole "to" day
+    r.to = end.toISOString();
+  }
+  return r;
+}
+
+/** Today's date (IST) as YYYY-MM-DD, for date-input defaults. */
+export function istToday(): string {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: IST, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+  return parts; // en-CA yields YYYY-MM-DD
 }

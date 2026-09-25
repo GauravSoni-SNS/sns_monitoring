@@ -348,32 +348,49 @@ impl Storage {
         Ok(self.conn.query_row("SELECT COUNT(1) FROM screenshots", [], |r| r.get(0))?)
     }
 
-    /// Recent activity rows (newest first) for the admin timeline (spec §33).
-    pub fn recent_activity(&self, limit: u32) -> Result<Vec<ActivityRow>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT event_id, event_type, timestamp_utc, application_name, window_title, metadata_json
-             FROM activity_events ORDER BY id DESC LIMIT ?1",
-        )?;
-        let rows = stmt.query_map([limit], |r| {
-            Ok(ActivityRow {
-                event_id: r.get(0)?,
-                event_type: r.get(1)?,
-                timestamp_utc: r.get(2)?,
-                application_name: r.get(3)?,
-                window_title: r.get(4)?,
-                metadata_json: r.get(5)?,
-            })
-        })?;
-        Ok(rows.filter_map(|r| r.ok()).collect())
+    /// Recent activity rows (newest first) for the admin timeline (spec §33), with an
+    /// optional UTC timestamp range `[from, to)` for date-wise filtering.
+    pub fn recent_activity(&self, limit: u32, from: Option<&str>, to: Option<&str>) -> Result<Vec<ActivityRow>> {
+        self.activity_query(None, limit, from, to)
     }
 
-    /// Recent browser-activity rows, read from the chained activity table (BROWSER_ACTIVITY).
-    pub fn recent_browser(&self, limit: u32) -> Result<Vec<ActivityRow>> {
-        let mut stmt = self.conn.prepare(
+    /// Recent browser-activity rows (BROWSER_ACTIVITY), with the same optional range.
+    pub fn recent_browser(&self, limit: u32, from: Option<&str>, to: Option<&str>) -> Result<Vec<ActivityRow>> {
+        self.activity_query(Some("BROWSER_ACTIVITY"), limit, from, to)
+    }
+
+    /// Shared activity reader: optional exact event-type filter + optional `[from, to)` UTC
+    /// range. Timestamps sort lexicographically = chronologically (RFC-3339 Z).
+    fn activity_query(
+        &self,
+        event_type: Option<&str>,
+        limit: u32,
+        from: Option<&str>,
+        to: Option<&str>,
+    ) -> Result<Vec<ActivityRow>> {
+        use rusqlite::types::Value;
+        let mut sql = String::from(
             "SELECT event_id, event_type, timestamp_utc, application_name, window_title, metadata_json
-             FROM activity_events WHERE event_type = 'BROWSER_ACTIVITY' ORDER BY id DESC LIMIT ?1",
-        )?;
-        let rows = stmt.query_map([limit], |r| {
+             FROM activity_events WHERE 1=1",
+        );
+        let mut args: Vec<Value> = Vec::new();
+        if let Some(t) = event_type {
+            sql.push_str(" AND event_type = ?");
+            args.push(Value::Text(t.to_string()));
+        }
+        if let Some(f) = from {
+            sql.push_str(" AND timestamp_utc >= ?");
+            args.push(Value::Text(f.to_string()));
+        }
+        if let Some(t) = to {
+            sql.push_str(" AND timestamp_utc < ?");
+            args.push(Value::Text(t.to_string()));
+        }
+        sql.push_str(" ORDER BY id DESC LIMIT ?");
+        args.push(Value::Integer(limit as i64));
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(args.iter()), |r| {
             Ok(ActivityRow {
                 event_id: r.get(0)?,
                 event_type: r.get(1)?,

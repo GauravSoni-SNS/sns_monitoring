@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import {
-  api, fmtBytes, fmtDuration, fmtTime,
-  type ActivityRow, type AuditRow, type ScreenshotRow, type UsageItem,
+  api, fmtBytes, fmtDuration, fmtTime, istRangeToUtc, istToday,
+  type ActivityRow, type AuditRow, type ScreenshotRow, type UsageItem, type Range,
 } from "./api";
 
 const NAV = [
@@ -81,9 +81,9 @@ function ViewRouter({ view }: { view: View }) {
   switch (view) {
     case "Dashboard": return <Dashboard />;
     case "Usage Time": return <Usage />;
-    case "Timeline": return <ActivityTable loader={api.timeline} cols={["timestamp_utc", "event_type", "application_name", "window_title"]} />;
-    case "Browser": return <ActivityTable loader={api.browser} cols={["timestamp_utc", "application_name", "window_title", "metadata_json"]} />;
-    case "System Events": return <ActivityTable loader={api.systemEvents} cols={["timestamp_utc", "event_type", "metadata_json"]} />;
+    case "Timeline": return <ActivityTable fetcher={api.timeline} cols={["timestamp_utc", "event_type", "application_name", "window_title"]} />;
+    case "Browser": return <ActivityTable fetcher={api.browser} cols={["timestamp_utc", "application_name", "window_title", "metadata_json"]} />;
+    case "System Events": return <ActivityTable fetcher={api.systemEvents} cols={["timestamp_utc", "event_type", "metadata_json"]} />;
     case "Screenshots": return <Screenshots />;
     case "Storage": return <Storage />;
     case "Audit Log": return <Audit />;
@@ -306,21 +306,31 @@ function UsageBars({ items, loading, err }: { items: UsageItem[] | null; loading
 }
 
 /* --------------------------- activity table --------------------------- */
-function ActivityTable({ loader, cols }: { loader: () => Promise<ActivityRow[]>; cols: string[] }) {
-  const { data, err, loading } = useAsync(loader);
+function ActivityTable({ fetcher, cols }: { fetcher: (o?: Range) => Promise<ActivityRow[]>; cols: string[] }) {
   const [q, setQ] = useState("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
   const [sel, setSel] = useState<ActivityRow | null>(null);
-  if (loading) return <div className="loading">Loading…</div>;
-  if (err) return <div className="err">{err}</div>;
+  const range = istRangeToUtc(from || undefined, to || undefined);
+  const { data, err, loading } = useAsync(() => fetcher(range), [from, to]);
+
   const rows = (data || []).filter((r) =>
     !q || JSON.stringify(r).toLowerCase().includes(q.toLowerCase()));
-  const label = (c: string) => c.replace(/_/g, " ").replace("utc", "time");
+  const label = (c: string) => (c === "timestamp_utc" ? "Time (IST)" : c.replace(/_/g, " "));
+  const setToday = () => { const t = istToday(); setFrom(t); setTo(t); };
+  const clear = () => { setFrom(""); setTo(""); setQ(""); };
+
   return (
     <>
-      <div className="toolbar">
-        <input placeholder="Filter…" value={q} onChange={(e) => setQ(e.target.value)} />
-        <span className="muted">{rows.length} rows</span>
+      <div className="toolbar filters">
+        <div className="date-field"><label>From</label><input type="date" value={from} max={to || undefined} onChange={(e) => setFrom(e.target.value)} /></div>
+        <div className="date-field"><label>To</label><input type="date" value={to} min={from || undefined} onChange={(e) => setTo(e.target.value)} /></div>
+        <button className="btn ghost sm" onClick={setToday}>Today</button>
+        <button className="btn ghost sm" onClick={clear}>Clear</button>
+        <input className="grow" placeholder="Search text…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <span className="muted">{loading ? "…" : `${rows.length} rows`}</span>
       </div>
+      {err && <div className="err">{err}</div>}
       <div className="tablewrap">
         <table>
           <thead><tr>{cols.map((c) => <th key={c}>{label(c)}</th>)}<th style={{ width: 44 }}></th></tr></thead>
