@@ -149,6 +149,67 @@ function DetailDrawer({ title, item, onClose }: { title: string; item: Record<st
   );
 }
 
+/* ------------------------------- icons -------------------------------- */
+function Icon({ name, size = 18 }: { name: string; size?: number }) {
+  const p: Record<string, any> = {
+    width: size, height: size, viewBox: "0 0 24 24", fill: "none",
+    stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round",
+  };
+  switch (name) {
+    case "shield": return <svg {...p}><path d="M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3z" /><path d="M9 12l2 2 4-4" /></svg>;
+    case "drive": return <svg {...p}><rect x="3" y="5" width="18" height="6" rx="2" /><rect x="3" y="13" width="18" height="6" rx="2" /><path d="M7 8h.01M7 16h.01" /></svg>;
+    case "clock": return <svg {...p}><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>;
+    case "camera": return <svg {...p}><path d="M4 8h3l1.5-2h7L18 8h2a1 1 0 011 1v9a1 1 0 01-1 1H4a1 1 0 01-1-1V9a1 1 0 011-1z" /><circle cx="12" cy="13" r="3.2" /></svg>;
+    case "check": return <svg {...p}><path d="M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3z" /><path d="M9 12l2 2 4-4" /></svg>;
+    case "copy": return <svg {...p}><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5a2 2 0 012-2h10" /></svg>;
+    case "done": return <svg {...p}><path d="M4 12l5 5L20 6" /></svg>;
+    default: return null;
+  }
+}
+
+/* ---------------------------- dashboard bits --------------------------- */
+function CopyChip({ label, value }: { label: string; value: string }) {
+  const [done, setDone] = useState(false);
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(value); setDone(true); setTimeout(() => setDone(false), 1400); } catch {}
+  };
+  return (
+    <div className="copychip">
+      <div className="cc-body">
+        <div className="cc-label">{label}</div>
+        <div className="cc-val">{value}</div>
+      </div>
+      <button className="cc-btn" title="Copy" onClick={copy}><Icon name={done ? "done" : "copy"} size={15} /></button>
+    </div>
+  );
+}
+
+function StatusBadge({ label, value, tone, live }: { label: string; value: string; tone: string; live?: boolean }) {
+  return (
+    <div className="status-badge">
+      <span className={`sb-dot ${tone}${live ? " live" : ""}`} />
+      <div>
+        <div className="sb-label">{label}</div>
+        <div className={`sb-val ${tone}`}>{value}</div>
+      </div>
+    </div>
+  );
+}
+
+function Metric({ icon, label, val, sub, meter }: { icon: string; label: string; val: any; sub?: any; meter?: number }) {
+  return (
+    <div className="card metric">
+      <div className="m-icon"><Icon name={icon} size={20} /></div>
+      <div className="m-body">
+        <div className="m-label">{label}</div>
+        <div className="m-val">{val}</div>
+        {sub != null && <div className="m-sub">{sub}</div>}
+        {meter != null && <div className="meter"><span style={{ width: `${Math.min(100, meter)}%` }} /></div>}
+      </div>
+    </div>
+  );
+}
+
 /* ----------------------------- dashboard ------------------------------ */
 function Dashboard() {
   const { data, err, loading } = useAsync(() => api.device());
@@ -156,20 +217,42 @@ function Dashboard() {
   if (err) return <div className="err">{err}</div>;
   const dev = data?.device, h = data?.health;
   const integ = h?.last_integrity_pass;
+  const pct = h && h.storage_max_bytes ? Math.round((h.storage_used_bytes / h.storage_max_bytes) * 100) : 0;
   return (
-    <div className="grid kpi">
-      <Card label="System Name">{dev?.system_name || "—"}</Card>
-      <Card label="Device ID" cls="sm"><span className="mono">{dev?.device_id || "—"}</span></Card>
-      <Card label="Hostname">{dev?.hostname || "—"}</Card>
-      <Card label="OS">{dev?.os_version || "—"}</Card>
-      <Card label="Agent">{dev?.agent_version || h?.agent_version || "—"}</Card>
-      <Card label="Agent Status">{h ? <span className="pill ok">{h.agent_status}</span> : "—"}</Card>
-      <Card label="Database">{h ? <span className={"pill " + (h.database === "HEALTHY" ? "ok" : "warn")}>{h.database}</span> : "—"}</Card>
-      <Card label="Encryption">{h ? <span className="pill ok">{h.encryption}</span> : "—"}</Card>
-      <Card label="Storage" cls="sm">{h ? `${fmtBytes(h.storage_used_bytes)} / ${fmtBytes(h.storage_max_bytes)}` : "—"}</Card>
-      <Card label="Last Event" cls="sm">{fmtTime(h?.last_event_utc)}</Card>
-      <Card label="Last Screenshot" cls="sm">{fmtTime(h?.last_screenshot_utc)}</Card>
-      <Card label="Integrity">{integ == null ? "—" : <span className={"pill " + (integ ? "ok" : "bad")}>{integ ? "PASS" : "FAIL"}</span>}</Card>
+    <div className="dash">
+      <section className="device-hero">
+        <div className="dh-avatar"><Icon name="shield" size={26} /></div>
+        <div className="dh-left">
+          <div className="dh-eyebrow">Managed device</div>
+          <div className="dh-name">{dev?.system_name || "—"}</div>
+          <div className="dh-meta">
+            <span>Hostname <b>{dev?.hostname || "—"}</b></span>
+            <span>OS <b>{dev?.os_version || "—"}</b></span>
+            <span>Agent <b>v{dev?.agent_version || h?.agent_version || "—"}</b></span>
+            <span>Last seen <b>{fmtTime(dev?.last_seen_at)}</b></span>
+          </div>
+        </div>
+        <div className="dh-right">
+          <CopyChip label="Device ID" value={dev?.device_id || "—"} />
+        </div>
+      </section>
+
+      <section className="status-strip">
+        <StatusBadge label="Agent" value={h?.agent_status || "—"} tone="ok" live={h?.agent_status === "RUNNING"} />
+        <StatusBadge label="Database" value={h?.database || "—"} tone={h?.database === "HEALTHY" ? "ok" : "warn"} />
+        <StatusBadge label="Encryption" value={h?.encryption || "—"} tone="ok" />
+        <StatusBadge label="Integrity" value={integ == null ? "—" : integ ? "PASS" : "FAIL"} tone={integ == null ? "warn" : integ ? "ok" : "bad"} />
+      </section>
+
+      <section className="grid metrics">
+        <Metric icon="drive" label="Storage" meter={pct}
+          val={h ? `${fmtBytes(h.storage_used_bytes)} / ${fmtBytes(h.storage_max_bytes)}` : "—"}
+          sub={`${pct}% used`} />
+        <Metric icon="clock" label="Last event" val={fmtTime(h?.last_event_utc)} />
+        <Metric icon="camera" label="Last screenshot" val={fmtTime(h?.last_screenshot_utc)} />
+        <Metric icon="check" label="Integrity checked" val={fmtTime(h?.last_integrity_check_utc)}
+          sub={integ == null ? undefined : integ ? "Chain valid" : "Chain broken"} />
+      </section>
     </div>
   );
 }

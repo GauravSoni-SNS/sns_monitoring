@@ -102,12 +102,80 @@ main { padding: 24px 30px; overflow: auto; }
   padding: 16px 18px; box-shadow: var(--shadow); }
 .card h4 { margin: 0 0 8px; color: var(--muted); font-size: 11px;
   text-transform: uppercase; letter-spacing: .07em; font-weight: 700; }
-.card .val { font-size: 22px; font-weight: 700; letter-spacing: -.01em; }
+.card .val { font-size: 22px; font-weight: 700; letter-spacing: -.01em; overflow-wrap: anywhere; }
 .card .val.sm { font-size: 15px; font-weight: 600; }
+.card .val.mono { font-family: "Cascadia Code", Consolas, ui-monospace, monospace; word-break: break-all; }
 .pill { padding: 3px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; }
 .pill.ok { color: var(--ok); background: var(--ok-soft); }
 .pill.bad { color: var(--bad); background: var(--bad-soft); }
 .pill.warn { color: var(--warn); background: var(--warn-soft); }
+
+/* ---------- dashboard: device hero ---------- */
+.dash { display: flex; flex-direction: column; gap: 18px; }
+.device-hero {
+  position: relative; overflow: hidden;
+  background: linear-gradient(135deg, #fff 0%, #fff 60%, var(--cherry-soft) 140%);
+  border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow);
+  padding: 22px 24px; display: flex; align-items: center; gap: 20px; flex-wrap: wrap;
+}
+.device-hero::before {
+  content: ""; position: absolute; inset: 0 auto 0 0; width: 5px;
+  background: linear-gradient(180deg, var(--cherry), var(--cherry-deep));
+}
+.dh-avatar {
+  width: 54px; height: 54px; border-radius: 14px; flex: none;
+  background: linear-gradient(135deg, var(--cherry), var(--cherry-deep));
+  display: grid; place-items: center; color: #fff; box-shadow: 0 6px 16px var(--cherry-ring);
+}
+.dh-left { min-width: 0; }
+.dh-eyebrow { font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--cherry-deep); font-weight: 700; }
+.dh-name { font-size: 26px; font-weight: 800; letter-spacing: -.02em; line-height: 1.15; }
+.dh-meta { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 8px; color: var(--muted); font-size: 12.5px; }
+.dh-meta b { color: var(--ink-2); font-weight: 600; }
+.dh-right { margin-left: auto; }
+
+.copychip {
+  display: inline-flex; align-items: center; gap: 10px; background: var(--surface-2);
+  border: 1px dashed var(--line); border-radius: 11px; padding: 10px 12px; max-width: 320px;
+}
+.copychip .cc-body { min-width: 0; }
+.copychip .cc-label { font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 700; }
+.copychip .cc-val { font-family: "Cascadia Code", Consolas, ui-monospace, monospace; font-size: 12.5px;
+  color: var(--ink); word-break: break-all; line-height: 1.35; }
+.copychip .cc-btn { flex: none; width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--line);
+  background: #fff; cursor: pointer; display: grid; place-items: center; color: var(--cherry); }
+.copychip .cc-btn:hover { background: var(--cherry); color: #fff; border-color: var(--cherry); }
+
+/* ---------- status strip ---------- */
+.status-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+.status-badge {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px;
+  display: flex; align-items: center; gap: 12px; box-shadow: var(--shadow);
+}
+.status-badge .sb-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; position: relative; }
+.status-badge .sb-dot.ok { background: var(--ok); }
+.status-badge .sb-dot.warn { background: var(--warn); }
+.status-badge .sb-dot.bad { background: var(--bad); }
+.status-badge .sb-dot.live::after {
+  content: ""; position: absolute; inset: -5px; border-radius: 50%; border: 2px solid var(--ok);
+  opacity: .6; animation: pulse 1.8s ease-out infinite;
+}
+@keyframes pulse { 0% { transform: scale(.6); opacity: .7; } 100% { transform: scale(1.6); opacity: 0; } }
+.status-badge .sb-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; font-weight: 700; }
+.status-badge .sb-val { font-size: 15px; font-weight: 700; margin-top: 1px; }
+.status-badge .sb-val.ok { color: var(--ok); } .status-badge .sb-val.warn { color: var(--warn); } .status-badge .sb-val.bad { color: var(--bad); }
+
+/* ---------- metric cards with icons ---------- */
+.grid.metrics { grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
+.metric { display: flex; gap: 14px; align-items: flex-start; }
+.metric .m-icon { width: 40px; height: 40px; border-radius: 11px; flex: none; display: grid; place-items: center;
+  background: var(--cherry-soft); color: var(--cherry-deep); }
+.metric .m-body { min-width: 0; }
+.metric .m-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; font-weight: 700; }
+.metric .m-val { font-size: 18px; font-weight: 700; margin-top: 2px; overflow-wrap: anywhere; }
+.metric .m-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.meter { height: 8px; border-radius: 6px; background: var(--line-2); overflow: hidden; margin-top: 8px; }
+.meter > span { display: block; height: 100%; border-radius: 6px; background: linear-gradient(90deg, var(--cherry), var(--cherry-deep)); }
 
 /* ---------- tables ---------- */
 .tablewrap { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
