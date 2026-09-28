@@ -148,16 +148,21 @@ export function fmtTime(iso?: string | null): string {
   }) + " IST";
 }
 
-/** Convert an IST calendar range (date inputs, YYYY-MM-DD) to UTC ISO bounds:
- *  from = IST 00:00 of `fromDate`; to = IST 00:00 of the day AFTER `toDate` (exclusive). */
+function nextDay(dateStr: string): string {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + 1);
+  return dt.toISOString().slice(0, 10);
+}
+
+/** IST calendar range (date inputs, YYYY-MM-DD) → RFC-3339 IST (+05:30) bounds that match
+ *  the stored timestamp format: from = IST 00:00 of `fromDate`; to = IST 00:00 of the day
+ *  after `toDate` (exclusive). String comparison against stored +05:30 timestamps is
+ *  chronological. */
 export function istRangeToUtc(fromDate?: string, toDate?: string): Range {
   const r: Range = {};
-  if (fromDate) r.from = new Date(`${fromDate}T00:00:00+05:30`).toISOString();
-  if (toDate) {
-    const end = new Date(`${toDate}T00:00:00+05:30`);
-    end.setDate(end.getDate() + 1); // include the whole "to" day
-    r.to = end.toISOString();
-  }
+  if (fromDate) r.from = `${fromDate}T00:00:00+05:30`;
+  if (toDate) r.to = `${nextDay(toDate)}T00:00:00+05:30`;
   return r;
 }
 

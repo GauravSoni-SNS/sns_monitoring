@@ -12,6 +12,52 @@ pub struct UsbDevice {
     pub label: Option<String>,  // volume label if available
 }
 
+/// A USB device of any class, identified from its device-instance id (spec §16).
+/// Metadata only — no file contents are ever read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct UsbDeviceInfo {
+    pub instance_id: String,        // e.g. USB\VID_0781&PID_5591\4C531001...
+    pub vendor_id: Option<String>,  // "0781"
+    pub product_id: Option<String>, // "5591"
+    pub serial: Option<String>,     // device serial, if the instance id carries a real one
+    pub description: Option<String>,// friendly name / device description
+}
+
+/// Parse VID / PID / serial out of a USB device-instance id. Pure + unit-tested.
+/// Format: `USB\VID_xxxx&PID_yyyy\<serial-or-bus-generated>`. A trailing segment that
+/// contains `&` is a bus-generated id (not a real device serial) → serial = None.
+pub fn parse_instance_id(id: &str) -> (Option<String>, Option<String>, Option<String>) {
+    let up = id.to_ascii_uppercase();
+    let grab = |key: &str| -> Option<String> {
+        up.find(key).map(|i| {
+            up[i + key.len()..].chars().take(4).collect::<String>()
+        }).filter(|s| s.len() == 4 && s.chars().all(|c| c.is_ascii_hexdigit()))
+    };
+    let vid = grab("VID_");
+    let pid = grab("PID_");
+    let serial = id.rsplit('\\').next().filter(|s| !s.is_empty() && !s.contains('&')).map(|s| s.to_string());
+    (vid, pid, serial)
+}
+
+/// Diff USB device sets keyed by instance id → (arrivals, removals).
+pub fn diff_devices(prev: &[UsbDeviceInfo], cur: &[UsbDeviceInfo]) -> (Vec<UsbDeviceInfo>, Vec<UsbDeviceInfo>) {
+    let has = |set: &[UsbDeviceInfo], id: &str| set.iter().any(|x| x.instance_id == id);
+    let arrivals = cur.iter().filter(|c| !has(prev, &c.instance_id)).cloned().collect();
+    let removals = prev.iter().filter(|p| !has(cur, &p.instance_id)).cloned().collect();
+    (arrivals, removals)
+}
+
+/// All USB devices currently present (any class), with identity.
+#[cfg(windows)]
+pub fn list_usb_devices() -> Vec<UsbDeviceInfo> {
+    win_dev::list()
+}
+
+#[cfg(not(windows))]
+pub fn list_usb_devices() -> Vec<UsbDeviceInfo> {
+    Vec::new()
+}
+
 /// Diff previous vs current removable set (keyed by drive letter).
 /// Returns (arrivals, removals). Pure + testable.
 pub fn diff(prev: &[UsbDevice], cur: &[UsbDevice]) -> (Vec<UsbDevice>, Vec<UsbDevice>) {
@@ -91,6 +137,73 @@ mod win {
     }
 }
 
+#[cfg(windows)]
+mod win_dev {
+    use super::{parse_instance_id, UsbDeviceInfo};
+    use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
+        SetupDiDestroyDeviceInfoList, SetupDiEnumDeviceInfo, SetupDiGetClassDevsW,
+        SetupDiGetDeviceInstanceIdW, SetupDiGetDeviceRegistryPropertyW, SP_DEVINFO_DATA,
+        DIGCF_ALLCLASSES, DIGCF_PRESENT,
+    };
+
+    const SPDRP_DEVICEDESC: u32 = 0x0;
+    const SPDRP_FRIENDLYNAME: u32 = 0xC;
+
+    fn widestr(buf: &[u16]) -> String {
+        let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+        String::from_utf16_lossy(&buf[..end])
+    }
+
+    unsafe fn prop(hdev: isize, data: *const SP_DEVINFO_DATA, id: u32) -> Option<String> {
+        let mut buf = [0u8; 1024];
+        let mut req = 0u32;
+        let mut ty = 0u32;
+        let ok = SetupDiGetDeviceRegistryPropertyW(hdev, data, id, &mut ty, buf.as_mut_ptr(), buf.len() as u32, &mut req);
+        if ok == 0 || req == 0 {
+            return None;
+        }
+        let n = (req as usize / 2).min(buf.len() / 2);
+        let wide = std::slice::from_raw_parts(buf.as_ptr() as *const u16, n);
+        let s = widestr(wide);
+        if s.is_empty() { None } else { Some(s) }
+    }
+
+    pub fn list() -> Vec<UsbDeviceInfo> {
+        let mut out = Vec::new();
+        unsafe {
+            let enumerator: Vec<u16> = "USB\0".encode_utf16().collect();
+            // Null ClassGuid + a specific enumerator requires DIGCF_ALLCLASSES.
+            let hdev = SetupDiGetClassDevsW(std::ptr::null(), enumerator.as_ptr(), std::ptr::null_mut(), DIGCF_PRESENT | DIGCF_ALLCLASSES);
+            // HDEVINFO is an isize handle; INVALID_HANDLE_VALUE == -1.
+            if hdev == -1 || hdev == 0 {
+                return out;
+            }
+            let mut idx = 0u32;
+            loop {
+                let mut data: SP_DEVINFO_DATA = std::mem::zeroed();
+                data.cbSize = std::mem::size_of::<SP_DEVINFO_DATA>() as u32;
+                if SetupDiEnumDeviceInfo(hdev, idx, &mut data) == 0 {
+                    break;
+                }
+                idx += 1;
+
+                let mut idbuf = [0u16; 512];
+                let mut req = 0u32;
+                let instance_id = if SetupDiGetDeviceInstanceIdW(hdev, &data, idbuf.as_mut_ptr(), idbuf.len() as u32, &mut req) != 0 {
+                    widestr(&idbuf)
+                } else {
+                    continue;
+                };
+                let description = prop(hdev, &data, SPDRP_FRIENDLYNAME).or_else(|| prop(hdev, &data, SPDRP_DEVICEDESC));
+                let (vendor_id, product_id, serial) = parse_instance_id(&instance_id);
+                out.push(UsbDeviceInfo { instance_id, vendor_id, product_id, serial, description });
+            }
+            SetupDiDestroyDeviceInfoList(hdev);
+        }
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,15 +232,54 @@ mod tests {
         assert!(a.is_empty() && r.is_empty());
     }
 
-    /// Live enumeration smoke test — must not panic. Ignored by default.
+    #[test]
+    fn parse_instance_id_extracts_vid_pid_serial() {
+        let (v, p, s) = parse_instance_id(r"USB\VID_0781&PID_5591\4C531001234567");
+        assert_eq!(v.as_deref(), Some("0781"));
+        assert_eq!(p.as_deref(), Some("5591"));
+        assert_eq!(s.as_deref(), Some("4C531001234567"));
+    }
+
+    #[test]
+    fn parse_instance_id_bus_generated_serial_is_none() {
+        // Trailing "&"-containing segment is bus-generated, not a real serial.
+        let (v, p, s) = parse_instance_id(r"USB\VID_046D&PID_C534\5&2ab1c3d&0&1");
+        assert_eq!(v.as_deref(), Some("046D"));
+        assert_eq!(p.as_deref(), Some("C534"));
+        assert_eq!(s, None);
+    }
+
+    #[test]
+    fn parse_instance_id_no_vid() {
+        let (v, p, _) = parse_instance_id(r"USB\ROOT_HUB30\4&12ab&0");
+        assert_eq!(v, None);
+        assert_eq!(p, None);
+    }
+
+    fn di(id: &str) -> UsbDeviceInfo {
+        UsbDeviceInfo { instance_id: id.into(), vendor_id: None, product_id: None, serial: None, description: None }
+    }
+
+    #[test]
+    fn device_diff_by_instance_id() {
+        let prev = vec![di("USB\\A")];
+        let cur = vec![di("USB\\A"), di("USB\\B")];
+        let (arr, rem) = diff_devices(&prev, &cur);
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0].instance_id, "USB\\B");
+        assert!(rem.is_empty());
+    }
+
+    /// Live enumeration smoke — must not panic. Ignored by default.
     /// Run: `cargo test -p sns-core --lib -- --ignored usb_live`
     #[test]
     #[ignore]
     fn usb_live() {
-        let list = list_removable();
-        eprintln!("removable drives: {}", list.len());
-        for d in &list {
-            eprintln!("  {} {:?}", d.drive, d.label);
+        eprintln!("removable drives: {}", list_removable().len());
+        let devs = list_usb_devices();
+        eprintln!("usb devices: {}", devs.len());
+        for d in devs.iter().take(8) {
+            eprintln!("  {} vid={:?} pid={:?} serial={:?} desc={:?}", d.instance_id, d.vendor_id, d.product_id, d.serial, d.description);
         }
     }
 }

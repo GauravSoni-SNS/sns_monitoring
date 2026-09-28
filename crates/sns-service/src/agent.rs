@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use sns_core::collectors::system::{agent_shutdown_event, session_ended, session_started, ShutdownReason};
-use sns_core::collectors::usb::{self, UsbDevice};
+use sns_core::collectors::usb::{self, UsbDeviceInfo};
 use sns_core::collectors::{screenshot, Collector};
 use sns_core::config::{AgentConfig, Policy};
 use sns_core::health::{ComponentHealth, HealthSnapshot, Status};
@@ -61,8 +61,8 @@ pub struct Agent {
     last_storage_level: StorageLevel,
     // Session logon/logoff signals pushed by the SCM control handler (spec §5, §15).
     session_inbox: Arc<Mutex<Vec<SessionSignal>>>,
-    // Last-seen removable (USB mass-storage) set, for change detection (spec §16).
-    prev_usb: Vec<UsbDevice>,
+    // Last-seen USB device set (all classes), for change detection (spec §16).
+    prev_usb: Vec<UsbDeviceInfo>,
 }
 
 /// A session change observed by the service control handler (spec §5, §15). Machine-level,
@@ -118,9 +118,9 @@ impl Agent {
             integrity_checked_at: now_utc_iso(),
             last_storage_level: StorageLevel::Ok,
             session_inbox: Arc::new(Mutex::new(Vec::new())),
-            // Baseline the currently-plugged removable drives so we only emit CHANGES
-            // after boot (no spurious "connected" for a stick already inserted).
-            prev_usb: usb::list_removable(),
+            // Baseline currently-attached USB devices so we only emit CHANGES after boot
+            // (no spurious "connected" for devices already plugged at startup).
+            prev_usb: usb::list_usb_devices(),
         })
     }
 
@@ -330,24 +330,31 @@ impl Agent {
         Ok(())
     }
 
-    /// Detect USB mass-storage connect/disconnect and chain the events (spec §16). Records
-    /// only drive letter + volume label — never touches file contents.
+    /// Detect USB device connect/disconnect (any class) and chain the events (spec §16).
+    /// Records device identity (VID/PID/serial/description) only — never file contents.
     fn check_usb(&mut self) {
-        let cur = usb::list_removable();
-        let (arrivals, removals) = usb::diff(&self.prev_usb, &cur);
-        for d in arrivals {
-            let meta = serde_json::json!({ "drive": d.drive, "label": d.label }).to_string();
-            let mut ev = lifecycle(&self.cfg.device_id, EventType::UsbDeviceConnected);
+        let cur = usb::list_usb_devices();
+        let (arrivals, removals) = usb::diff_devices(&self.prev_usb, &cur);
+        let emit = |storage: &mut Storage, dev_id: &str, d: &UsbDeviceInfo, ty: EventType| {
+            let meta = serde_json::json!({
+                "instance_id": d.instance_id,
+                "vendor_id": d.vendor_id,
+                "product_id": d.product_id,
+                "serial": d.serial,
+                "description": d.description,
+            })
+            .to_string();
+            let mut ev = lifecycle(dev_id, ty);
             ev.metadata_json = Some(meta);
-            let _ = self.storage.insert_activity_event(&ev);
-            tracing::info!(drive = %d.drive, "usb mass-storage connected");
+            let _ = storage.insert_activity_event(&ev);
+        };
+        for d in &arrivals {
+            emit(&mut self.storage, &self.cfg.device_id, d, EventType::UsbDeviceConnected);
+            tracing::info!(desc = ?d.description, vid = ?d.vendor_id, "usb device connected");
         }
-        for d in removals {
-            let meta = serde_json::json!({ "drive": d.drive, "label": d.label }).to_string();
-            let mut ev = lifecycle(&self.cfg.device_id, EventType::UsbDeviceDisconnected);
-            ev.metadata_json = Some(meta);
-            let _ = self.storage.insert_activity_event(&ev);
-            tracing::info!(drive = %d.drive, "usb mass-storage disconnected");
+        for d in &removals {
+            emit(&mut self.storage, &self.cfg.device_id, d, EventType::UsbDeviceDisconnected);
+            tracing::info!(desc = ?d.description, "usb device disconnected");
         }
         self.prev_usb = cur;
     }
