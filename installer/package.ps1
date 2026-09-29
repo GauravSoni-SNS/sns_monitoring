@@ -24,7 +24,7 @@ foreach ($e in $exes) {
 function Fill-Bundle($dir) {
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
     foreach ($e in $exes) { Copy-Item (Join-Path $rel $e) $dir -Force }
-    foreach ($f in "install.ps1","uninstall.ps1","Install.cmd","Uninstall.cmd") {
+    foreach ($f in "install.ps1","uninstall.ps1","update-binaries.ps1","Install.cmd","Uninstall.cmd") {
         Copy-Item (Join-Path $PSScriptRoot $f) $dir -Force
     }
     @"

@@ -28,14 +28,20 @@ totals. `/api/usage?kind=app|browser&days=N` → top-N per-name seconds + sessio
 rendered as bar charts. Pure aggregation over already-collected data; no new capture surface.
 Unit-tested (idle cap + per-name sum + sort).
 
-### C. Browser activity — live URL/domain (mode-agnostic)
-Enhance the browser collector to read the **foreground** browser tab's URL/domain from the
-visible window via **UI Automation** (address-bar value) + window title. This is live
-foreground observation — the same thing a screenshot shows — so it naturally covers any
-mode (normal, guest, private) that is currently on screen. It is **not** history recovery
-and **not** reading the browser's private store; if no browser window is in the foreground,
-nothing is captured. Per-domain visit duration is derived like app usage-time (B).
-Granularity (domain vs full URL) stays policy-controlled; default = domain.
+### C. Browser activity — live URL/domain (mode-agnostic) — ✅ DONE
+The user-session agent reads the **foreground** browser's address-bar value via **UI
+Automation** (`sns_core::collectors::browser::foreground_browser_url`): it resolves the
+foreground `HWND`, `ElementFromHandle`, finds the Edit control(s), and reads the
+`ValuePattern` current value, picking the first that looks like a site (`looks_like_site`
+heuristic — dotted host / scheme / localhost, rejecting typed searches). This is live
+on-screen observation — the same thing a screenshot shows — so it naturally covers any mode
+(normal, guest, private) that is currently visible. It is **not** history recovery and
+**not** reading the browser's private store/cookies/credentials; if no browser is in the
+foreground or the address bar is unreadable, nothing is captured (page titles are never
+recorded as sites). Emitted on focus change only (no per-second spam). Per-domain visit
+duration derives from these `BROWSER_ACTIVITY` events via the usage-time aggregation (B).
+Granularity (domain vs full URL) stays policy-controlled; default = domain. Verify live with
+`sns-agentctl probe-url` (focus a browser tab first). Heuristic unit-tested.
 
 > Explicitly NOT in scope: defeating private-mode isolation, browser process injection,
 > extension-based capture of another profile's data, or reconstructing history the browser

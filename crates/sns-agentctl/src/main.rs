@@ -26,6 +26,7 @@ fn main() {
         "status" => cmd_status(),
         "health" => cmd_health(),
         "diagnostics" => cmd_diagnostics(),
+        "probe-url" => cmd_probe_url(),
         "help" | "--help" | "-h" => {
             print_help();
             0
@@ -48,6 +49,7 @@ fn print_help() {
          \n  health             Health snapshot (spec §26)\
          \n  verify-integrity   Recompute the event hash chain (spec §22)\
          \n  diagnostics        Paths, config validity, db reachability\
+         \n  probe-url          Read the FOREGROUND browser's address bar once (verify UIA)\
          \n\nRead-only. Does not run collectors; the Windows Service does that."
     );
 }
@@ -198,4 +200,23 @@ fn cmd_diagnostics() -> i32 {
         Err(e) => println!("agent.json: INVALID ({e})"),
     }
     0
+}
+
+/// One-shot UI Automation probe: prints the current FOREGROUND browser's address-bar value.
+/// Focus a browser tab, then run this. Verifies the live-URL capture path (feature C)
+/// without needing the service running. Reads only the on-screen address bar — no history,
+/// stores, or credentials.
+fn cmd_probe_url() -> i32 {
+    match sns_core::collectors::browser::foreground_browser_url() {
+        Some(url) => {
+            let domain = sns_core::collectors::browser::extract_domain(&url).unwrap_or_else(|| url.clone());
+            println!("foreground URL : {url}");
+            println!("domain         : {domain}");
+            0
+        }
+        None => {
+            println!("no browser address bar in the foreground (focus a Chrome/Edge/Firefox tab and retry)");
+            1
+        }
+    }
 }

@@ -107,7 +107,6 @@ fn sample_apps(
 ) {
     let Some(sample) = application::foreground_sample() else { return };
     let browser_name = application::is_browser_process(&sample.process_name);
-    let title = sample.window_title.clone();
 
     let events = app.on_sample(sample);
     let changed = !events.is_empty();
@@ -119,13 +118,19 @@ fn sample_apps(
     }
 
     // Emit a browser-activity record only on an actual change (tab/window switch changes
-    // the caption), to avoid per-second spam.
+    // the caption), to avoid per-second spam. The site value is the live on-screen address
+    // bar (URL/domain) read via UI Automation — mode-agnostic (covers normal/guest/private
+    // that is currently visible), never history recovery or private-store reading. Falls
+    // back to nothing if the address bar is unreadable (we do not record page titles as
+    // sites, since a title is not a URL).
     if changed && policy.browser.enabled {
-        if let (Some(bname), Some(t)) = (browser_name, title) {
-            let ev = browser.build_event(bname, &t);
-            let stem = ev.event_id.clone();
-            if let Err(e) = dropbox::write_record(root, &stem, &DropRecord::Activity(ev)) {
-                tracing::warn!(error = %e, "failed to drop browser record");
+        if let Some(bname) = browser_name {
+            if let Some(url) = sns_core::collectors::browser::foreground_browser_url() {
+                let ev = browser.build_event(bname, &url);
+                let stem = ev.event_id.clone();
+                if let Err(e) = dropbox::write_record(root, &stem, &DropRecord::Activity(ev)) {
+                    tracing::warn!(error = %e, "failed to drop browser record");
+                }
             }
         }
     }

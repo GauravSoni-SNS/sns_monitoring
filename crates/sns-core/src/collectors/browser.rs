@@ -57,9 +57,116 @@ impl Collector for BrowserCollector {
     }
 
     fn poll(&mut self) -> Result<Vec<ActivityEvent>> {
-        // TODO(build step 7): read foreground browser tab (Chrome/Edge/Firefox) via
-        // UI Automation; feed into build_event. No history/credential access.
+        // The user-session agent drives browser capture directly via `build_event` fed by
+        // `foreground_browser_url`; this collector path is unused there.
         Ok(vec![])
+    }
+}
+
+/// Read the **foreground** browser window's address-bar text (URL/host) via UI Automation.
+///
+/// This is live, on-screen observation — the same surface a screenshot shows — so it
+/// naturally covers whatever mode is currently visible (normal, guest, private). It is NOT
+/// history recovery and NOT reading the browser's private stores/cookies/credentials: it
+/// only reads the value already painted in the visible address bar. Returns `None` when the
+/// foreground window is not a browser, has no readable address bar, or UIA is unavailable.
+#[cfg(windows)]
+pub fn foreground_browser_url() -> Option<String> {
+    win_uia::address_bar_url()
+}
+
+#[cfg(not(windows))]
+pub fn foreground_browser_url() -> Option<String> {
+    None
+}
+
+/// Heuristic: does this address-bar value look like a site (URL/host) rather than a typed
+/// search query? Accepts scheme-bearing values (`https://`, `chrome://`), `localhost`, and
+/// any dotted host token. Rejects empty/whitespace-bearing text (typed searches).
+pub fn looks_like_site(raw: &str) -> bool {
+    let s = raw.trim();
+    if s.is_empty() || s.contains(char::is_whitespace) {
+        return false;
+    }
+    if s.contains("://") {
+        return true;
+    }
+    let host = s.split(['/', '?', '#']).next().unwrap_or(s);
+    let host = host.split(':').next().unwrap_or(host); // drop :port
+    host.eq_ignore_ascii_case("localhost") || host.contains('.')
+}
+
+#[cfg(windows)]
+mod win_uia {
+    use std::cell::RefCell;
+
+    use windows::core::Interface;
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
+    };
+    use windows::Win32::System::Variant::VARIANT;
+    use windows::Win32::UI::Accessibility::{
+        CUIAutomation, IUIAutomation, IUIAutomationValuePattern, TreeScope_Descendants,
+        UIA_ControlTypePropertyId, UIA_EditControlTypeId, UIA_ValuePatternId,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+
+    thread_local! {
+        static UIA: RefCell<Option<IUIAutomation>> = const { RefCell::new(None) };
+    }
+
+    /// Cached per-thread UI Automation client (COM initialized MTA once per thread).
+    fn automation() -> Option<IUIAutomation> {
+        UIA.with(|cell| {
+            if let Some(a) = cell.borrow().as_ref() {
+                return Some(a.clone());
+            }
+            unsafe {
+                // Ignore RPC_E_CHANGED_MODE if COM is already initialized on this thread.
+                let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+                match CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) {
+                    Ok(a) => {
+                        *cell.borrow_mut() = Some(a);
+                        cell.borrow().clone()
+                    }
+                    Err(_) => None,
+                }
+            }
+        })
+    }
+
+    pub fn address_bar_url() -> Option<String> {
+        unsafe {
+            let hwnd = GetForegroundWindow();
+            if hwnd.0.is_null() {
+                return None;
+            }
+            let uia = automation()?;
+            let root = uia.ElementFromHandle(hwnd).ok()?;
+
+            // Find edit controls in the window; the address bar is an Edit exposing a
+            // ValuePattern whose value is the current URL/host.
+            let cond = uia
+                .CreatePropertyCondition(
+                    UIA_ControlTypePropertyId,
+                    &VARIANT::from(UIA_EditControlTypeId.0),
+                )
+                .ok()?;
+            let edits = root.FindAll(TreeScope_Descendants, &cond).ok()?;
+            let count = edits.Length().ok()?;
+
+            for i in 0..count {
+                let Ok(el) = edits.GetElement(i) else { continue };
+                let Ok(unknown) = el.GetCurrentPattern(UIA_ValuePatternId) else { continue };
+                let Ok(vp) = unknown.cast::<IUIAutomationValuePattern>() else { continue };
+                let Ok(bstr) = vp.CurrentValue() else { continue };
+                let value = bstr.to_string();
+                if super::looks_like_site(&value) {
+                    return Some(value);
+                }
+            }
+            None
+        }
     }
 }
 
@@ -100,6 +207,17 @@ mod tests {
         let ev = c.build_event("chrome", "https://github.com/anthropics/secret-repo");
         assert_eq!(ev.window_title.as_deref(), Some("github.com")); // no path retained
         assert_eq!(ev.event_type, EventType::BrowserActivity);
+    }
+
+    #[test]
+    fn site_heuristic() {
+        assert!(looks_like_site("github.com/anthropics"));
+        assert!(looks_like_site("https://x.com/page?q=1"));
+        assert!(looks_like_site("chrome://settings"));
+        assert!(looks_like_site("localhost:7731"));
+        assert!(!looks_like_site("how to build a service")); // typed search
+        assert!(!looks_like_site("")); // empty
+        assert!(!looks_like_site("   ")); // whitespace only
     }
 
     #[test]
