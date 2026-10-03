@@ -29,6 +29,9 @@ pub const ROUTES: &[Route] = &[
     Route { method: "GET", path: "/api/usb-devices", summary: "Live inventory of connected USB devices (all classes)" },
     // Storage / audit / integrity
     Route { method: "GET", path: "/api/storage", summary: "Usage vs quota + retention state" },
+    Route { method: "PUT", path: "/api/retention", summary: "Update retention policy (validated, audited)" },
+    Route { method: "POST", path: "/api/retention/purge-browser", summary: "Run browser-history removal now (re-seals chain)" },
+    Route { method: "POST", path: "/api/retention/purge-screenshots", summary: "Run screenshot cleanup now (age + heuristic)" },
     Route { method: "GET", path: "/api/audit", summary: "Audit log (append-only)" },
     Route { method: "POST", path: "/api/integrity/verify", summary: "Run chain verification (spec §22)" },
     // Configuration (authorized change → history + CONFIGURATION_CHANGED + audit)

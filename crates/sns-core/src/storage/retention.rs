@@ -60,7 +60,7 @@ mod tests {
 
     #[test]
     fn unsynced_data_protected_by_default() {
-        let ret = RetentionPolicy { screenshot_days: 7, event_days: 30, delete_unsynced: false };
+        let ret = RetentionPolicy { screenshot_days: 7, event_days: 30, delete_unsynced: false, browser: Default::default(), screenshot_cleanup: Default::default() };
         // Old but LOCAL_ONLY → must NOT delete (spec §25).
         assert!(!is_deletable(60, 30, SyncStatus::LocalOnly, &ret));
         // Old and synced → deletable.
@@ -71,7 +71,7 @@ mod tests {
 
     #[test]
     fn policy_can_permit_unsynced_deletion() {
-        let ret = RetentionPolicy { screenshot_days: 7, event_days: 30, delete_unsynced: true };
+        let ret = RetentionPolicy { screenshot_days: 7, event_days: 30, delete_unsynced: true, browser: Default::default(), screenshot_cleanup: Default::default() };
         assert!(is_deletable(60, 30, SyncStatus::LocalOnly, &ret));
     }
 }

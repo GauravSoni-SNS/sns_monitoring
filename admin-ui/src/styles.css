@@ -299,3 +299,18 @@ pre.json { background: var(--surface-2); border: 1px solid var(--line); border-r
 .a-body { display: flex; flex-direction: column; gap: 2px; }
 .a-msg { color: var(--ink); font-weight: 600; }
 .a-meta { color: var(--muted); font-size: 12px; }
+
+/* --------------------------- retention form --------------------------- */
+.retcard { display: flex; flex-direction: column; gap: 12px; }
+.retcard h4 { margin: 0 0 2px; }
+.row2 { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.row2 > span { color: var(--ink-2); font-size: 13.5px; }
+.row2 input[type="number"], .row2 input[type="text"], .row2 select {
+  padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff;
+  color: var(--ink); font-size: 13.5px; min-width: 140px;
+}
+.row2 input[type="text"] { flex: 1; min-width: 200px; }
+.row2.chk { justify-content: flex-start; }
+.row2.chk input { width: 16px; height: 16px; accent-color: var(--cherry); }
+.ok-msg { background: var(--ok-soft); color: var(--ok); border: 1px solid var(--ok);
+  border-radius: var(--radius); padding: 10px 14px; font-weight: 600; grid-column: 1 / -1; }

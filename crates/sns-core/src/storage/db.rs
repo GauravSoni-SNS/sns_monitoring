@@ -438,12 +438,36 @@ impl Storage {
 
     /// Screenshot metadata list (newest first) for the admin gallery (spec §33).
     pub fn list_screenshots(&self, limit: u32) -> Result<Vec<ScreenshotMeta>> {
-        let mut stmt = self.conn.prepare(
+        self.list_screenshots_range(limit, None, None)
+    }
+
+    /// Screenshots newest-first, optionally bounded to `[from, to)` (RFC-3339 strings; same
+    /// +05:30 format as stored timestamps, so string comparison is chronological).
+    pub fn list_screenshots_range(
+        &self,
+        limit: u32,
+        from: Option<&str>,
+        to: Option<&str>,
+    ) -> Result<Vec<ScreenshotMeta>> {
+        use rusqlite::types::Value;
+        let mut sql = String::from(
             "SELECT screenshot_id, device_id, timestamp_utc, file_path, file_size, sha256,
                     encryption_version, monitor_id, created_at, sync_status
-             FROM screenshots ORDER BY id DESC LIMIT ?1",
-        )?;
-        let rows = stmt.query_map([limit], |r| Ok(row_to_screenshot(r)))?;
+             FROM screenshots WHERE 1=1",
+        );
+        let mut params: Vec<Value> = Vec::new();
+        if let Some(f) = from {
+            sql.push_str(" AND timestamp_utc >= ?");
+            params.push(Value::Text(f.to_string()));
+        }
+        if let Some(t) = to {
+            sql.push_str(" AND timestamp_utc < ?");
+            params.push(Value::Text(t.to_string()));
+        }
+        sql.push_str(" ORDER BY id DESC LIMIT ?");
+        params.push(Value::Integer(limit as i64));
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(params), |r| Ok(row_to_screenshot(r)))?;
         Ok(rows.filter_map(|r| r.ok()).collect())
     }
 
@@ -664,6 +688,145 @@ impl Storage {
         Ok(RetentionOutcome { screenshots_deleted, browser_deleted, system_deleted })
     }
 
+    /// Re-seal the entire activity chain: recompute `previous_event_hash` / `event_hash` for
+    /// every row in insertion order so the chain is valid again after rows were deleted.
+    /// This is the deliberate trade-off for allowing real deletion (feature #5): the chain
+    /// stays verifiable, but it can no longer prove that *nothing* was ever removed. Returns
+    /// the number of rows re-sealed. Updates `chain_head`.
+    pub fn reseal_chain(&mut self) -> Result<usize> {
+        let tx = self.conn.transaction()?;
+        let rows: Vec<(i64, ActivityEvent)> = {
+            let mut stmt = tx.prepare(
+                "SELECT id, event_id, device_id, event_type, timestamp_utc, application_name,
+                        process_name, window_title, metadata_json
+                 FROM activity_events ORDER BY id ASC",
+            )?;
+            let mapped = stmt.query_map([], |r| {
+                let et: String = r.get(3)?;
+                let event_type = serde_json::from_value(serde_json::Value::String(et))
+                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(e)))?;
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    ActivityEvent {
+                        event_id: r.get(1)?,
+                        device_id: r.get(2)?,
+                        event_type,
+                        timestamp_utc: r.get(4)?,
+                        application_name: r.get(5)?,
+                        process_name: r.get(6)?,
+                        window_title: r.get(7)?,
+                        metadata_json: r.get(8)?,
+                    },
+                ))
+            })?;
+            let mut v = Vec::new();
+            for row in mapped {
+                v.push(row?);
+            }
+            v
+        };
+
+        let mut prev = GENESIS_HASH.to_string();
+        let mut n = 0usize;
+        {
+            let mut up = tx.prepare(
+                "UPDATE activity_events SET event_hash = ?1, previous_event_hash = ?2 WHERE id = ?3",
+            )?;
+            for (id, ev) in &rows {
+                let hash = ev.compute_hash(&prev);
+                up.execute(params![hash, prev, id])?;
+                prev = hash;
+                n += 1;
+            }
+        }
+        tx.commit()?;
+        self.chain_head = prev;
+        Ok(n)
+    }
+
+    /// Delete browser-activity rows per the selected mode, then re-seal the chain. `mode`:
+    /// `"auto"` deletes all BROWSER_ACTIVITY older than the cutoff; `"selection"` deletes only
+    /// those whose domain (window_title) matches one of `domains` (case-insensitive substring)
+    /// older than the cutoff; `"none"` deletes nothing. `older_than_iso` is the cutoff (events
+    /// strictly older are eligible). Manual/explicit action, so sync-status is not a guard.
+    /// Returns rows deleted.
+    pub fn purge_browser(
+        &mut self,
+        mode: &str,
+        domains: &[String],
+        older_than_iso: &str,
+    ) -> Result<usize> {
+        let deleted = match mode {
+            "auto" => self.conn.execute(
+                "DELETE FROM activity_events
+                 WHERE event_type = 'BROWSER_ACTIVITY' AND timestamp_utc < ?1",
+                params![older_than_iso],
+            )?,
+            "selection" => {
+                let pats: Vec<&String> = domains.iter().filter(|d| !d.is_empty()).collect();
+                if pats.is_empty() {
+                    0
+                } else {
+                    // Build  (window_title LIKE %?% OR ...)  with one bound param per domain.
+                    let likes = pats
+                        .iter()
+                        .map(|_| "window_title LIKE '%'||?||'%'")
+                        .collect::<Vec<_>>()
+                        .join(" OR ");
+                    let sql = format!(
+                        "DELETE FROM activity_events
+                         WHERE event_type = 'BROWSER_ACTIVITY' AND timestamp_utc < ? AND ({likes})"
+                    );
+                    use rusqlite::types::Value;
+                    let mut params_vec: Vec<Value> = vec![Value::Text(older_than_iso.to_string())];
+                    for d in &pats {
+                        params_vec.push(Value::Text((*d).clone()));
+                    }
+                    self.conn.execute(&sql, rusqlite::params_from_iter(params_vec))?
+                }
+            }
+            _ => 0, // "none" or unknown
+        };
+        if deleted > 0 {
+            self.reseal_chain()?;
+        }
+        Ok(deleted)
+    }
+
+    /// Screenshots for cleanup, oldest first, as `(id, file_path)`. If `before_iso` is set,
+    /// only those strictly older are returned (age gate).
+    pub fn screenshots_for_cleanup(&self, before_iso: Option<&str>) -> Result<Vec<(String, String)>> {
+        let (sql, has_cut) = match before_iso {
+            Some(_) => (
+                "SELECT screenshot_id, file_path FROM screenshots WHERE timestamp_utc < ?1 ORDER BY timestamp_utc ASC",
+                true,
+            ),
+            None => ("SELECT screenshot_id, file_path FROM screenshots ORDER BY timestamp_utc ASC", false),
+        };
+        let mut stmt = self.conn.prepare(sql)?;
+        let map = |r: &rusqlite::Row| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?));
+        let rows: Vec<(String, String)> = if has_cut {
+            stmt.query_map(params![before_iso.unwrap()], map)?.filter_map(|r| r.ok()).collect()
+        } else {
+            stmt.query_map([], map)?.filter_map(|r| r.ok()).collect()
+        };
+        Ok(rows)
+    }
+
+    /// Delete screenshot rows by id (caller unlinks the files). Returns rows deleted.
+    /// Screenshots are not part of the integrity chain, so no re-seal is needed.
+    pub fn delete_screenshots_by_ids(&self, ids: &[String]) -> Result<usize> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let mut n = 0;
+        let tx_ids = ids.to_vec();
+        for id in &tx_ids {
+            n += self.conn.execute("DELETE FROM screenshots WHERE screenshot_id = ?1", params![id])?;
+        }
+        Ok(n)
+    }
+
     /// Graceful-shutdown checkpoint (spec §6, §28). wal_checkpoint returns a status row,
     /// so query it rather than pragma_update.
     pub fn checkpoint_truncate(&self) -> Result<()> {
@@ -743,6 +906,47 @@ mod tests {
         let report = s.verify_integrity().unwrap();
         assert!(report.is_pass());
         assert_eq!(report.events_checked, 3);
+    }
+
+    fn browser_ev(id: &str, domain: &str, ts: &str) -> ActivityEvent {
+        ActivityEvent {
+            event_id: id.into(),
+            device_id: "dev_T".into(),
+            event_type: EventType::BrowserActivity,
+            timestamp_utc: ts.into(),
+            application_name: Some("chrome".into()),
+            process_name: Some("chrome".into()),
+            window_title: Some(domain.into()),
+            metadata_json: Some("{\"browser\":\"chrome\"}".into()),
+        }
+    }
+
+    #[test]
+    fn purge_browser_selection_reseals_and_verifies() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("activity.db");
+        let mut s = Storage::open(&db, "dev_T", "NORMAL").unwrap();
+        s.upsert_device("SNS-PC-001", Some("HOST"), Some("Win"), "1.0.0").unwrap();
+        s.insert_activity_event(&ev("evt_1", "chrome.exe")).unwrap();
+        s.insert_activity_event(&browser_ev("b_g", "google.com", "2026-08-11T10:00:00+05:30")).unwrap();
+        s.insert_activity_event(&browser_ev("b_y", "youtube.com", "2026-08-11T10:01:00+05:30")).unwrap();
+        s.insert_activity_event(&browser_ev("b_k", "github.com", "2026-08-11T10:02:00+05:30")).unwrap();
+
+        // Remove google + youtube older than a future cutoff; keep github.
+        let n = s
+            .purge_browser("selection", &["google.com".into(), "youtube.com".into()], "2026-12-01T00:00:00+05:30")
+            .unwrap();
+        assert_eq!(n, 2);
+
+        // Chain still verifies after the re-seal.
+        let report = s.verify_integrity().unwrap();
+        assert!(report.is_pass());
+        assert_eq!(report.events_checked, 2); // chrome.exe + github
+
+        // github survived, google/youtube gone.
+        let rows = s.recent_browser(100, None, None).unwrap();
+        assert!(rows.iter().any(|r| r.window_title.as_deref() == Some("github.com")));
+        assert!(!rows.iter().any(|r| r.window_title.as_deref() == Some("google.com")));
     }
 
     fn screenshot_meta(dir: &std::path::Path, ts: &str, sync: SyncStatus) -> (ScreenshotMeta, std::path::PathBuf) {

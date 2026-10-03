@@ -446,17 +446,27 @@ function ShotThumb({ id, onOpen }: { id: string; onOpen: () => void }) {
 }
 
 function Screenshots() {
-  const { data, err, loading } = useAsync(() => api.screenshots());
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const range = istRangeToUtc(from || undefined, to || undefined);
+  const { data, err, loading } = useAsync(() => api.screenshots(range), [from, to]);
   const [open, setOpen] = useState<ScreenshotRow | null>(null);
   const [sel, setSel] = useState<ScreenshotRow | null>(null);
   const [imgErr, setImgErr] = useState("");
-  if (loading) return <div className="loading">Loading…</div>;
-  if (err) return <div className="err">{err}</div>;
   const rows = data || [];
-  if (!rows.length) return <div className="muted">No screenshots captured yet.</div>;
+  const setToday = () => { const t = istToday(); setFrom(t); setTo(t); };
+  const clear = () => { setFrom(""); setTo(""); };
   return (
     <>
-      <div className="toolbar"><span className="muted">{rows.length} screenshots · click a card to decrypt & view</span></div>
+      <div className="toolbar filters">
+        <div className="date-field"><label>From</label><input type="date" value={from} max={to || undefined} onChange={(e) => setFrom(e.target.value)} /></div>
+        <div className="date-field"><label>To</label><input type="date" value={to} min={from || undefined} onChange={(e) => setTo(e.target.value)} /></div>
+        <button className="btn ghost sm" onClick={setToday}>Today</button>
+        <button className="btn ghost sm" onClick={clear}>Clear</button>
+        <span className="muted">{loading ? "…" : `${rows.length} screenshots · click a card to decrypt & view`}</span>
+      </div>
+      {err && <div className="err">{err}</div>}
+      {!loading && !err && rows.length === 0 && <div className="muted">No screenshots in this range.</div>}
       <div className="shots">
         {rows.map((r) => (
           <div className="shot" key={r.screenshot_id}>
@@ -484,25 +494,88 @@ function Screenshots() {
 
 /* ------------------------------ storage ------------------------------- */
 function Storage() {
-  const { data, err, loading } = useAsync(() => api.storage());
+  const { data, err, loading, reload } = useAsync(() => api.storage());
+  const [ret, setRet] = useState<any>(null);
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState("");
+  useEffect(() => { if (data?.policy?.retention) setRet(JSON.parse(JSON.stringify(data.policy.retention))); }, [data]);
   if (loading) return <div className="loading">Loading…</div>;
   if (err) return <div className="err">{err}</div>;
-  const p = data?.policy || {}, st = p.storage || {}, ret = p.retention || {};
+  const p = data?.policy || {}, st = p.storage || {};
   const used = data?.used_bytes || 0, max = st.max_bytes || 1;
   const pct = Math.min(100, Math.round((used / max) * 100));
+  if (!ret) return <div className="loading">Loading…</div>;
+
+  const browser = ret.browser || { mode: "none", domains: [], days: 60 };
+  const sc = ret.screenshot_cleanup || { heuristic_enabled: true, max_age_days: 60 };
+  const setBrowser = (patch: any) => setRet({ ...ret, browser: { ...browser, ...patch } });
+  const setSc = (patch: any) => setRet({ ...ret, screenshot_cleanup: { ...sc, ...patch } });
+
+  const save = async () => {
+    setBusy("save"); setMsg("");
+    try { await api.updateRetention(ret); setMsg("Retention policy saved."); }
+    catch (e: any) { setMsg("Error: " + (e.message || e)); }
+    finally { setBusy(""); }
+  };
+  const purgeBrowser = async () => {
+    if (!confirm("Delete matching browser history now? This re-seals the integrity chain and cannot be undone.")) return;
+    setBusy("pb"); setMsg("");
+    try { const r = await api.purgeBrowser(); setMsg(`Browser purge: ${r.deleted} row(s) removed (mode: ${r.mode}).`); }
+    catch (e: any) { setMsg("Error: " + (e.message || e)); }
+    finally { setBusy(""); }
+  };
+  const purgeShots = async () => {
+    if (!confirm("Run screenshot cleanup now? Deleted screenshots cannot be recovered.")) return;
+    setBusy("ps"); setMsg("");
+    try { const r = await api.purgeScreenshots(); setMsg(`Screenshot cleanup: ${r.deleted} removed (${r.by_age} by age, ${r.by_heuristic} junk/dupes).`); reload(); }
+    catch (e: any) { setMsg("Error: " + (e.message || e)); }
+    finally { setBusy(""); }
+  };
+
   return (
-    <div className="grid kpi">
-      <div className="card" style={{ gridColumn: "1 / -1" }}>
+    <div className="dash">
+      <section className="card" style={{ gridColumn: "1 / -1" }}>
         <h4>Disk usage</h4>
         <div className="val sm">{fmtBytes(used)} / {fmtBytes(max)} ({pct}%)</div>
         <div className="bar-track" style={{ marginTop: 10, height: 12 }}>
           <div className="bar-fill" style={{ width: `${pct}%`, background: pct >= (st.critical_pct || 90) ? "var(--bad)" : pct >= (st.warn_pct || 80) ? "var(--warn)" : undefined }} />
         </div>
+      </section>
+
+      {msg && <div className={msg.startsWith("Error") ? "err" : "ok-msg"}>{msg}</div>}
+
+      <section className="card retcard">
+        <h4>Screenshot cleanup</h4>
+        <label className="row2"><span>Delete older than (days)</span>
+          <input type="number" min={1} value={sc.max_age_days} onChange={(e) => setSc({ max_age_days: Number(e.target.value) })} /></label>
+        <label className="row2 chk"><input type="checkbox" checked={!!sc.heuristic_enabled} onChange={(e) => setSc({ heuristic_enabled: e.target.checked })} />
+          <span>Auto-drop lock-screen / blank / near-duplicate frames</span></label>
+        <button className="btn ghost" disabled={busy === "ps"} onClick={purgeShots}>{busy === "ps" ? "Cleaning…" : "Clean screenshots now"}</button>
+      </section>
+
+      <section className="card retcard">
+        <h4>Browser history removal</h4>
+        <label className="row2"><span>Mode</span>
+          <select value={browser.mode} onChange={(e) => setBrowser({ mode: e.target.value })}>
+            <option value="none">No removal</option>
+            <option value="selection">Selection (specific sites)</option>
+            <option value="auto">Auto (all, by age)</option>
+          </select></label>
+        <label className="row2"><span>Older than (days)</span>
+          <input type="number" min={1} value={browser.days} onChange={(e) => setBrowser({ days: Number(e.target.value) })} /></label>
+        {browser.mode === "selection" && (
+          <label className="row2"><span>Domains (comma-separated)</span>
+            <input type="text" placeholder="google.com, youtube.com, music" value={(browser.domains || []).join(", ")}
+              onChange={(e) => setBrowser({ domains: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) })} /></label>
+        )}
+        <div className="muted" style={{ fontSize: 12 }}>Deletion re-seals the tamper-evident chain (verify still passes).</div>
+        <button className="btn ghost" disabled={busy === "pb" || browser.mode === "none"} onClick={purgeBrowser}>{busy === "pb" ? "Purging…" : "Purge browser history now"}</button>
+      </section>
+
+      <div className="toolbar" style={{ gridColumn: "1 / -1" }}>
+        <button className="btn" disabled={busy === "save"} onClick={save}>{busy === "save" ? "Saving…" : "Save retention settings"}</button>
+        <span className="muted">Screenshot age retention: {ret.screenshot_days}d · Event retention: {ret.event_days}d</span>
       </div>
-      <Card label="Warn / Critical" cls="sm">{st.warn_pct}% / {st.critical_pct}%</Card>
-      <Card label="Screenshot retention" cls="sm">{ret.screenshot_days} days</Card>
-      <Card label="Event retention" cls="sm">{ret.event_days} days</Card>
-      <Card label="Delete un-synced" cls="sm">{String(ret.delete_unsynced)}</Card>
     </div>
   );
 }

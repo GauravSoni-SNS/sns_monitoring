@@ -67,6 +67,23 @@ capture, no network. Rules load from `config/alerts.json` (optional; defaults if
 matches newest-first (capped 200); shown in a new **Alerts** admin view with severity badges.
 Unit-tested (severity mapping, app/domain dedupe, after-hours per-day dedupe).
 
+### H. Retention / storage control + data cleanup — ✅ DONE
+Editable retention from the admin **Storage** view (validated, audited), plus on-demand and
+automatic cleanup:
+- **Browser history removal**, three modes — `none` / `selection` (specific domains) / `auto`
+  (all, by age). Deletes matching `BROWSER_ACTIVITY` rows and **re-seals the tamper-evident
+  chain** (`Storage::reseal_chain`) so integrity verify still passes — the deliberate trade-off
+  for allowing real deletion (can no longer prove nothing was removed).
+- **Screenshot cleanup** — age gate (`max_age_days`) plus a heuristic junk-prune: decrypt +
+  fingerprint (8×8 average-hash + luma std-dev) to drop **lock-screen / blank / near-duplicate**
+  frames (`plan_cleanup`), keeping varied content. Uninspectable frames are never deleted. (A
+  semantic "informative" ML classifier is deferred to a later phase.)
+- **Manual purge** buttons (`POST /api/retention/purge-browser|purge-screenshots`) and
+  **auto-run** in the service maintenance loop, throttled to once / 6h, re-reading policy so
+  panel edits take effect without a restart.
+Unit-tested: browser purge + re-seal keeps verify passing; fingerprint blank/dup detection;
+plan_cleanup drop/keep logic.
+
 ### D. Central sync + server (the original Phase-2 core)
 Agent → encrypted local store → secure API → PostgreSQL + object storage, per the
 architecture below. Idempotent upload keyed on the existing ULIDs; `sync_status` drives the

@@ -118,7 +118,7 @@ export const api = {
   timeline: (o?: Range) => json<ActivityRow[]>(`/api/timeline${qs(o)}`),
   browser: (o?: Range) => json<ActivityRow[]>(`/api/browser${qs(o)}`),
   systemEvents: (o?: Range) => json<ActivityRow[]>(`/api/system-events${qs(o)}`),
-  screenshots: () => json<ScreenshotRow[]>("/api/screenshots"),
+  screenshots: (o?: Range) => json<ScreenshotRow[]>(`/api/screenshots${qs(o)}`),
   audit: () => json<AuditRow[]>("/api/audit"),
   storage: () => json<{ used_bytes: number; policy: any }>("/api/storage"),
   config: () => json<{ agent: any; policy: any }>("/api/config"),
@@ -129,6 +129,20 @@ export const api = {
   usbDevices: () => json<UsbDevice[]>("/api/usb-devices"),
   screenshotImageUrl: (id: string) => `/api/screenshots/${id}/image`,
   screenshotThumbUrl: (id: string) => `/api/screenshots/${id}/image?thumb=1`,
+  async updateRetention(retention: any): Promise<void> {
+    const res = await req("/api/retention", { method: "PUT", body: JSON.stringify({ csrf, retention }) });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+  },
+  async purgeBrowser(): Promise<{ deleted: number; mode: string }> {
+    const res = await req("/api/retention/purge-browser", { method: "POST", body: JSON.stringify({ csrf }) });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+    return res.json();
+  },
+  async purgeScreenshots(): Promise<{ deleted: number; by_age: number; by_heuristic: number }> {
+    const res = await req("/api/retention/purge-screenshots", { method: "POST", body: JSON.stringify({ csrf }) });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+    return res.json();
+  },
   async verifyIntegrity(): Promise<{ events_checked: number; invalid_records: number; pass: boolean; first_breaks: string[] }> {
     const res = await req("/api/integrity/verify", {
       method: "POST",

@@ -69,6 +69,77 @@ pub fn thumbnail(png: &[u8], max_dim: u32) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+/// Content fingerprint of a decoded screenshot, used by the heuristic cleanup (feature #5).
+#[derive(Debug, Clone, Copy)]
+pub struct Fingerprint {
+    /// 8×8 average-hash (perceptual) — small Hamming distance ⇒ visually near-identical.
+    pub ahash: u64,
+    /// Std-dev of luma over the 8×8 grid. Very low ⇒ near-uniform (blank / lock screen).
+    pub luma_stddev: f64,
+}
+
+/// Compute a perceptual fingerprint from PNG bytes: downscale to 8×8 grayscale, take the
+/// average-hash and the luma std-dev. Cheap and decode-only; no capture.
+pub fn fingerprint(png: &[u8]) -> Result<Fingerprint> {
+    let img = image::load_from_memory(png).map_err(|_| CoreError::Storage("fp decode failed".into()))?;
+    let small = img.resize_exact(8, 8, image::imageops::FilterType::Triangle).to_luma8();
+    let px: Vec<f64> = small.pixels().map(|p| p.0[0] as f64).collect();
+    let mean = px.iter().sum::<f64>() / px.len() as f64;
+    let var = px.iter().map(|v| (v - mean) * (v - mean)).sum::<f64>() / px.len() as f64;
+    let mut ahash = 0u64;
+    for (i, v) in px.iter().enumerate() {
+        if *v >= mean {
+            ahash |= 1 << i;
+        }
+    }
+    Ok(Fingerprint { ahash, luma_stddev: var.sqrt() })
+}
+
+/// Hamming distance between two average-hashes (0 = identical frame).
+pub fn ahash_distance(a: u64, b: u64) -> u32 {
+    (a ^ b).count_ones()
+}
+
+/// Heuristic "junk" test for a single frame: near-uniform screens (blank desktop, lock/login
+/// screen, screensaver) have very low luma variation. Threshold chosen to flag flat frames
+/// while keeping any screen with real window content.
+pub fn is_blank_or_lock(fp: &Fingerprint) -> bool {
+    fp.luma_stddev < 8.0
+}
+
+/// Default Hamming threshold below which two consecutive frames count as near-duplicates.
+pub const NEAR_DUPLICATE_DISTANCE: u32 = 5;
+
+/// Decide which screenshots to drop by content. `frames` is ordered oldest→newest as
+/// `(id, fingerprint)`; a `None` fingerprint (decrypt/decode failed) is always KEPT (never
+/// delete what we could not inspect). With `heuristic` on: blank/lock frames are dropped, and
+/// a frame within `NEAR_DUPLICATE_DISTANCE` of the last kept frame is dropped as a duplicate.
+/// Returns the ids to delete. Pure + testable.
+pub fn plan_cleanup(frames: &[(String, Option<Fingerprint>)], heuristic: bool) -> Vec<String> {
+    let mut drop = Vec::new();
+    if !heuristic {
+        return drop;
+    }
+    let mut last_kept: Option<u64> = None;
+    for (id, fp) in frames {
+        let Some(fp) = fp else {
+            continue; // uninspectable → keep
+        };
+        if is_blank_or_lock(fp) {
+            drop.push(id.clone());
+            continue;
+        }
+        if let Some(prev) = last_kept {
+            if ahash_distance(prev, fp.ahash) <= NEAR_DUPLICATE_DISTANCE {
+                drop.push(id.clone());
+                continue;
+            }
+        }
+        last_kept = Some(fp.ahash);
+    }
+    drop
+}
+
 /// Platform display grab → downscaled PNG bytes for a monitor.
 ///
 /// IMPORTANT (session-0 limitation): a LocalSystem service runs in session 0 and cannot
@@ -235,6 +306,61 @@ mod tests {
     #[test]
     fn png_encode_rejects_bad_dimensions() {
         assert!(encode_png(10, 10, vec![0u8; 8], 0, 0).is_err());
+    }
+
+    // Build a PNG from an 8-bit grayscale pattern for fingerprint tests.
+    fn gray_png(f: impl Fn(u32, u32) -> u8) -> Vec<u8> {
+        use image::{ImageFormat, Luma};
+        let mut img = image::GrayImage::new(64, 64);
+        for (x, y, p) in img.enumerate_pixels_mut() {
+            *p = Luma([f(x, y)]);
+        }
+        let mut out = Vec::new();
+        image::DynamicImage::ImageLuma8(img)
+            .write_to(&mut std::io::Cursor::new(&mut out), ImageFormat::Png)
+            .unwrap();
+        out
+    }
+
+    #[test]
+    fn blank_frame_flagged_content_frame_kept() {
+        let blank = gray_png(|_, _| 30); // uniform → lock/blank
+        let content = gray_png(|x, y| (((x * 13) ^ (y * 7)) & 0xFF) as u8); // busy pattern
+        assert!(is_blank_or_lock(&fingerprint(&blank).unwrap()));
+        assert!(!is_blank_or_lock(&fingerprint(&content).unwrap()));
+    }
+
+    #[test]
+    fn plan_cleanup_drops_blank_and_dupes_keeps_content() {
+        let busy = fingerprint(&gray_png(|x, y| (((x * 13) ^ (y * 7)) & 0xFF) as u8)).unwrap();
+        let busy_dup = fingerprint(&gray_png(|x, y| (((x * 13) ^ (y * 7)) & 0xFF) as u8)).unwrap();
+        let other = fingerprint(&gray_png(|x, y| (((x * 5) ^ (y * 11)) & 0xFF) as u8)).unwrap();
+        let blank = fingerprint(&gray_png(|_, _| 30)).unwrap();
+        let frames = vec![
+            ("keep1".to_string(), Some(busy)),
+            ("dup".to_string(), Some(busy_dup)),   // near-dup of keep1 → drop
+            ("blank".to_string(), Some(blank)),    // blank → drop
+            ("keep2".to_string(), Some(other)),    // different content → keep
+            ("unreadable".to_string(), None),      // never drop
+        ];
+        let drop = plan_cleanup(&frames, true);
+        assert!(drop.contains(&"dup".to_string()));
+        assert!(drop.contains(&"blank".to_string()));
+        assert!(!drop.contains(&"keep1".to_string()));
+        assert!(!drop.contains(&"keep2".to_string()));
+        assert!(!drop.contains(&"unreadable".to_string()));
+        // heuristic off → nothing dropped
+        assert!(plan_cleanup(&frames, false).is_empty());
+    }
+
+    #[test]
+    fn near_duplicate_detected() {
+        let a = gray_png(|x, y| (((x * 13) ^ (y * 7)) & 0xFF) as u8);
+        let a2 = gray_png(|x, y| (((x * 13) ^ (y * 7)) & 0xFF) as u8); // identical
+        let b = gray_png(|x, y| (((x * 5) ^ (y * 11)) & 0xFF) as u8); // different
+        let (fa, fa2, fb) = (fingerprint(&a).unwrap(), fingerprint(&a2).unwrap(), fingerprint(&b).unwrap());
+        assert!(ahash_distance(fa.ahash, fa2.ahash) <= NEAR_DUPLICATE_DISTANCE);
+        assert!(ahash_distance(fa.ahash, fb.ahash) > NEAR_DUPLICATE_DISTANCE);
     }
 
     /// Live capture against the real display. Ignored by default (needs a session with a

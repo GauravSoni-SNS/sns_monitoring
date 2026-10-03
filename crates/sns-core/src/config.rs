@@ -141,6 +141,44 @@ pub struct RetentionPolicy {
     pub event_days: u32,
     /// Never delete un-synced data unless this is true (spec §25).
     pub delete_unsynced: bool,
+    /// Browser-history auto-removal. `#[serde(default)]` keeps old policy.json loadable.
+    #[serde(default)]
+    pub browser: BrowserRetention,
+    /// Screenshot cleanup (heuristic junk-prune + age).
+    #[serde(default)]
+    pub screenshot_cleanup: ScreenshotCleanup,
+}
+
+/// Browser-history retention. Three modes:
+///  - `none`       — keep everything (default).
+///  - `auto`       — remove ALL browser events older than `days`.
+///  - `selection`  — remove browser events whose domain matches `domains`, older than `days`.
+/// Deletion re-seals the tamper-evident chain so integrity verification still passes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrowserRetention {
+    pub mode: String,
+    pub domains: Vec<String>,
+    pub days: u32,
+}
+
+impl Default for BrowserRetention {
+    fn default() -> Self {
+        BrowserRetention { mode: "none".into(), domains: Vec::new(), days: 60 }
+    }
+}
+
+/// Screenshot cleanup policy. `heuristic_enabled` drops lock-screen / blank / near-duplicate
+/// frames; `max_age_days` removes anything older regardless of content.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScreenshotCleanup {
+    pub heuristic_enabled: bool,
+    pub max_age_days: u32,
+}
+
+impl Default for ScreenshotCleanup {
+    fn default() -> Self {
+        ScreenshotCleanup { heuristic_enabled: true, max_age_days: 60 }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -197,7 +235,13 @@ impl Policy {
             browser: BrowserPolicy { enabled: true, granularity: "domain".into() },
             usb: TogglePolicy { enabled: true },
             storage: StoragePolicy { max_bytes: 10_737_418_240, warn_pct: 80, critical_pct: 90 },
-            retention: RetentionPolicy { screenshot_days: 7, event_days: 30, delete_unsynced: false },
+            retention: RetentionPolicy {
+                screenshot_days: 7,
+                event_days: 30,
+                delete_unsynced: false,
+                browser: BrowserRetention::default(),
+                screenshot_cleanup: ScreenshotCleanup::default(),
+            },
             durability: DurabilityPolicy { sqlite_synchronous: "NORMAL".into() },
             idle: default_idle(),
         }

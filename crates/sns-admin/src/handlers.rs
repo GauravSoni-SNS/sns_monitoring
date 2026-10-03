@@ -180,11 +180,18 @@ pub async fn system_events(
     }
 }
 
-pub async fn screenshots(State(state): State<AppState>, headers: HeaderMap) -> Response {
+pub async fn screenshots(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Query(q): axum::extract::Query<RangeQuery>,
+) -> Response {
     if let Err(r) = require_auth(&state, &headers) {
         return r;
     }
-    match db(&state).and_then(|s| s.list_screenshots(300).map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))) {
+    match db(&state).and_then(|s| {
+        s.list_screenshots_range(300, q.from.as_deref(), q.to.as_deref())
+            .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))
+    }) {
         Ok(rows) => Json(rows).into_response(),
         Err(r) => r,
     }
@@ -356,6 +363,183 @@ pub async fn integrity_verify(
         .into_response(),
         Err(r) => r,
     }
+}
+
+// ------------------------------ retention (#5) -----------------------------
+
+fn db_writer(state: &AppState) -> Result<Storage, Response> {
+    Storage::open(state.data_root.join("database").join("activity.db"), &state.device_id, "NORMAL")
+        .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &format!("db: {e}")))
+}
+
+fn load_policy(state: &AppState) -> Result<Policy, Response> {
+    Policy::load(state.data_root.join("config").join("policy.json"))
+        .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &format!("policy: {e}")))
+}
+
+#[derive(Deserialize)]
+pub struct RetentionUpdate {
+    csrf: String,
+    retention: sns_core::config::RetentionPolicy,
+}
+
+/// Update the retention section of policy.json (validated). Audited. Capture-policy fields are
+/// untouched; the service re-reads policy on its next cycle.
+pub async fn update_retention(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<RetentionUpdate>,
+) -> Response {
+    let token = match require_auth(&state, &headers) {
+        Ok(t) => t,
+        Err(r) => return r,
+    };
+    if !state.csrf_matches(&token, &body.csrf) {
+        return error(StatusCode::FORBIDDEN, "bad csrf token");
+    }
+    let mut policy = match load_policy(&state) {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
+    policy.retention = body.retention;
+    if let Err(e) = policy.validate() {
+        return error(StatusCode::BAD_REQUEST, &format!("invalid policy: {e}"));
+    }
+    let path = state.data_root.join("config").join("policy.json");
+    let json_bytes = match serde_json::to_vec_pretty(&policy) {
+        Ok(b) => b,
+        Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+    if let Err(e) = std::fs::write(&path, json_bytes) {
+        return error(StatusCode::INTERNAL_SERVER_ERROR, &format!("write policy: {e}"));
+    }
+    if let Ok(s) = db(&state) {
+        let _ = s.audit("RETENTION_POLICY_CHANGED", Some("admin"), None);
+    }
+    Json(json!({ "ok": true })).into_response()
+}
+
+/// Run browser-history removal now, using the configured mode/domains/days. Deletes matching
+/// BROWSER_ACTIVITY rows and re-seals the chain. Audited.
+pub async fn purge_browser(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<CsrfBody>,
+) -> Response {
+    let token = match require_auth(&state, &headers) {
+        Ok(t) => t,
+        Err(r) => return r,
+    };
+    if !state.csrf_matches(&token, &body.csrf) {
+        return error(StatusCode::FORBIDDEN, "bad csrf token");
+    }
+    let policy = match load_policy(&state) {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
+    let br = &policy.retention.browser;
+    if br.mode == "none" {
+        return Json(json!({ "deleted": 0, "mode": "none" })).into_response();
+    }
+    let cutoff = sns_core::clock::iso_days_ago(br.days);
+    let mut writer = match db_writer(&state) {
+        Ok(w) => w,
+        Err(r) => return r,
+    };
+    match writer.purge_browser(&br.mode, &br.domains, &cutoff) {
+        Ok(n) => {
+            let _ = writer.audit("BROWSER_HISTORY_PURGED", Some("admin"), Some(&format!("{{\"deleted\":{n},\"mode\":\"{}\"}}", br.mode)));
+            Json(json!({ "deleted": n, "mode": br.mode })).into_response()
+        }
+        Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
+/// Run screenshot cleanup now: delete frames older than `max_age_days`, plus (if enabled)
+/// blank/lock/near-duplicate frames detected by decrypting + fingerprinting the survivors.
+/// Unlinks the files. Audited.
+pub async fn purge_screenshots(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<CsrfBody>,
+) -> Response {
+    let token = match require_auth(&state, &headers) {
+        Ok(t) => t,
+        Err(r) => return r,
+    };
+    if !state.csrf_matches(&token, &body.csrf) {
+        return error(StatusCode::FORBIDDEN, "bad csrf token");
+    }
+    let policy = match load_policy(&state) {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
+    let sc = &policy.retention.screenshot_cleanup;
+    let writer = match db_writer(&state) {
+        Ok(w) => w,
+        Err(r) => return r,
+    };
+
+    // 1) Age gate: everything older than max_age_days.
+    let age_cut = sns_core::clock::iso_days_ago(sc.max_age_days);
+    let aged = match writer.screenshots_for_cleanup(Some(&age_cut)) {
+        Ok(v) => v,
+        Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+    let aged_ids: std::collections::HashSet<String> = aged.iter().map(|(id, _)| id.clone()).collect();
+
+    // 2) Heuristic over the survivors (needs decrypt).
+    let mut heuristic_ids: Vec<String> = Vec::new();
+    let mut path_of: std::collections::HashMap<String, String> =
+        aged.iter().cloned().map(|(id, p)| (id, p)).collect();
+    if sc.heuristic_enabled {
+        let km = match KeyManager::load(state.data_root.join("keys").join("keyring.json")) {
+            Ok(k) => k,
+            Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, &format!("keys: {e}")),
+        };
+        let survivors: Vec<(String, String)> = match writer.screenshots_for_cleanup(None) {
+            Ok(v) => v.into_iter().filter(|(id, _)| !aged_ids.contains(id)).collect(),
+            Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        };
+        let frames: Vec<(String, Option<sns_core::collectors::screenshot::Fingerprint>)> = survivors
+            .iter()
+            .map(|(id, path)| {
+                let fp = std::fs::read(path)
+                    .ok()
+                    .and_then(|blob| crypto::decrypt(km.data_key(), &blob).ok())
+                    .and_then(|png| sns_core::collectors::screenshot::fingerprint(&png).ok());
+                (id.clone(), fp)
+            })
+            .collect();
+        for (id, p) in &survivors {
+            path_of.insert(id.clone(), p.clone());
+        }
+        heuristic_ids = sns_core::collectors::screenshot::plan_cleanup(&frames, true);
+    }
+
+    // 3) Delete rows + unlink files.
+    let mut all_ids: Vec<String> = aged_ids.iter().cloned().collect();
+    all_ids.extend(heuristic_ids.iter().cloned());
+    let deleted = match writer.delete_screenshots_by_ids(&all_ids) {
+        Ok(n) => n,
+        Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+    for id in &all_ids {
+        if let Some(p) = path_of.get(id) {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+    let _ = writer.audit(
+        "SCREENSHOTS_CLEANED",
+        Some("admin"),
+        Some(&format!("{{\"age\":{},\"heuristic\":{},\"deleted\":{}}}", aged_ids.len(), heuristic_ids.len(), deleted)),
+    );
+    Json(json!({
+        "deleted": deleted,
+        "by_age": aged_ids.len(),
+        "by_heuristic": heuristic_ids.len(),
+    }))
+    .into_response()
 }
 
 // ------------------------- screenshot on-demand view -----------------------

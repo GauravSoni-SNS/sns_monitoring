@@ -63,7 +63,13 @@ pub struct Agent {
     session_inbox: Arc<Mutex<Vec<SessionSignal>>>,
     // Last-seen USB device set (all classes), for change detection (spec §16).
     prev_usb: Vec<UsbDeviceInfo>,
+    // Throttle for the heavier auto-cleanup (browser purge + screenshot heuristic): run at
+    // most once per CLEANUP_INTERVAL. `None` until the first run.
+    last_cleanup: Option<std::time::Instant>,
 }
+
+/// Minimum spacing between auto-cleanup passes (browser purge + screenshot cleanup).
+const CLEANUP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(6 * 3600);
 
 /// A session change observed by the service control handler (spec §5, §15). Machine-level,
 /// no auth secrets — just the numeric session id.
@@ -121,6 +127,7 @@ impl Agent {
             // Baseline currently-attached USB devices so we only emit CHANGES after boot
             // (no spurious "connected" for devices already plugged at startup).
             prev_usb: usb::list_usb_devices(),
+            last_cleanup: None,
         })
     }
 
@@ -262,8 +269,94 @@ impl Agent {
             Err(e) => tracing::warn!(error = %e, "retention prune failed"),
         }
 
+        // Heavier auto-cleanup (browser purge + screenshot heuristic), throttled.
+        let due = self.last_cleanup.map(|t| t.elapsed() >= CLEANUP_INTERVAL).unwrap_or(true);
+        if due {
+            self.run_auto_cleanup();
+            self.last_cleanup = Some(std::time::Instant::now());
+        }
+
         if let Err(e) = self.publish_health(used) {
             tracing::warn!(error = %e, "failed to publish health snapshot");
+        }
+    }
+
+    /// Auto browser-history removal + screenshot cleanup per the current policy. Re-reads
+    /// policy.json so panel edits take effect without a restart. Browser deletion re-seals the
+    /// chain (feature #5). Runs in session 0 (SYSTEM) which can unwrap the machine-DPAPI DEK.
+    fn run_auto_cleanup(&mut self) {
+        // Re-read policy (panel may have changed retention since boot).
+        let retention = match Policy::load(self.data_root.join("config").join("policy.json")) {
+            Ok(p) => p.retention,
+            Err(_) => self.policy.retention.clone(),
+        };
+
+        // Browser history.
+        let br = &retention.browser;
+        if br.mode != "none" {
+            let cutoff = sns_core::clock::iso_days_ago(br.days);
+            match self.storage.purge_browser(&br.mode, &br.domains, &cutoff) {
+                Ok(n) if n > 0 => {
+                    let _ = self.storage.audit("BROWSER_HISTORY_PURGED", Some("service"), Some(&format!("{{\"deleted\":{n},\"mode\":\"{}\"}}", br.mode)));
+                    tracing::info!(deleted = n, mode = %br.mode, "auto browser purge");
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!(error = %e, "auto browser purge failed"),
+            }
+        }
+
+        // Screenshots: age gate + heuristic.
+        let sc = &retention.screenshot_cleanup;
+        let age_cut = sns_core::clock::iso_days_ago(sc.max_age_days);
+        let aged = self.storage.screenshots_for_cleanup(Some(&age_cut)).unwrap_or_default();
+        let aged_ids: std::collections::HashSet<String> = aged.iter().map(|(id, _)| id.clone()).collect();
+        let mut path_of: std::collections::HashMap<String, String> =
+            aged.iter().cloned().map(|(id, p)| (id, p)).collect();
+
+        let mut heuristic_ids: Vec<String> = Vec::new();
+        if sc.heuristic_enabled {
+            let survivors: Vec<(String, String)> = self
+                .storage
+                .screenshots_for_cleanup(None)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|(id, _)| !aged_ids.contains(id))
+                .collect();
+            let frames: Vec<(String, Option<sns_core::collectors::screenshot::Fingerprint>)> = survivors
+                .iter()
+                .map(|(id, path)| {
+                    let fp = std::fs::read(path)
+                        .ok()
+                        .and_then(|blob| sns_core::security::crypto::decrypt(self.keys.data_key(), &blob).ok())
+                        .and_then(|png| sns_core::collectors::screenshot::fingerprint(&png).ok());
+                    (id.clone(), fp)
+                })
+                .collect();
+            for (id, p) in &survivors {
+                path_of.insert(id.clone(), p.clone());
+            }
+            heuristic_ids = sns_core::collectors::screenshot::plan_cleanup(&frames, true);
+        }
+
+        let mut all_ids: Vec<String> = aged_ids.iter().cloned().collect();
+        all_ids.extend(heuristic_ids.iter().cloned());
+        if !all_ids.is_empty() {
+            match self.storage.delete_screenshots_by_ids(&all_ids) {
+                Ok(n) => {
+                    for id in &all_ids {
+                        if let Some(p) = path_of.get(id) {
+                            let _ = std::fs::remove_file(p);
+                        }
+                    }
+                    let _ = self.storage.audit(
+                        "SCREENSHOTS_CLEANED",
+                        Some("service"),
+                        Some(&format!("{{\"age\":{},\"heuristic\":{},\"deleted\":{}}}", aged_ids.len(), heuristic_ids.len(), n)),
+                    );
+                    tracing::info!(deleted = n, "auto screenshot cleanup");
+                }
+                Err(e) => tracing::warn!(error = %e, "auto screenshot cleanup failed"),
+            }
         }
     }
 

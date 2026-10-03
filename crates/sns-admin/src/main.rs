@@ -61,6 +61,9 @@ fn main() -> anyhow::Result<()> {
         .route("/api/audit", get(handlers::audit))
         .route("/api/config", get(handlers::config))
         .route("/api/integrity/verify", post(handlers::integrity_verify))
+        .route("/api/retention", axum::routing::put(handlers::update_retention))
+        .route("/api/retention/purge-browser", post(handlers::purge_browser))
+        .route("/api/retention/purge-screenshots", post(handlers::purge_screenshots))
         .fallback(get(handlers::static_handler))
         .with_state(state);
 
