@@ -22,6 +22,11 @@ pub const ROUTES: &[Route] = &[
     // Screenshots (spec §33) — decrypt on demand, audit each view
     Route { method: "GET", path: "/api/screenshots", summary: "Screenshot metadata list" },
     Route { method: "GET", path: "/api/screenshots/:id/image", summary: "On-demand decrypt + stream (audited)" },
+    // Usage-time + presence
+    Route { method: "GET", path: "/api/usage", summary: "Per-app / per-domain focus seconds" },
+    Route { method: "GET", path: "/api/idle", summary: "Total idle seconds (SESSION_IDLE/ACTIVE)" },
+    Route { method: "GET", path: "/api/alerts", summary: "Local alert rules evaluated over recent events" },
+    Route { method: "GET", path: "/api/usb-devices", summary: "Live inventory of connected USB devices (all classes)" },
     // Storage / audit / integrity
     Route { method: "GET", path: "/api/storage", summary: "Usage vs quota + retention state" },
     Route { method: "GET", path: "/api/audit", summary: "Audit log (append-only)" },

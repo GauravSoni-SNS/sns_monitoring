@@ -111,6 +111,39 @@ fn aggregate_usage(rows: &[(String, String)], idle_cap: i64) -> Vec<UsageItem> {
     out
 }
 
+/// Sum idle spans from ordered (event_type, timestamp) rows of SESSION_IDLE/SESSION_ACTIVE.
+/// A SESSION_IDLE opens an interval; the next SESSION_ACTIVE closes it. A trailing open idle
+/// is closed at `now_iso`. Negative/garbage spans are skipped.
+fn sum_idle(rows: &[(String, String)], now_iso: &str) -> i64 {
+    let mut total = 0i64;
+    let mut idle_start: Option<OffsetDateTime> = None;
+    for (etype, ts) in rows {
+        let Ok(t) = OffsetDateTime::parse(ts, &Rfc3339) else { continue };
+        match etype.as_str() {
+            "SESSION_IDLE" => idle_start = Some(t),
+            "SESSION_ACTIVE" => {
+                if let Some(start) = idle_start.take() {
+                    let secs = (t - start).whole_seconds();
+                    if secs > 0 {
+                        total += secs;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    // Still idle now: close the open interval at `now`.
+    if let Some(start) = idle_start {
+        if let Ok(now) = OffsetDateTime::parse(now_iso, &Rfc3339) {
+            let secs = (now - start).whole_seconds();
+            if secs > 0 {
+                total += secs;
+            }
+        }
+    }
+    total
+}
+
 fn row_to_screenshot(r: &rusqlite::Row) -> ScreenshotMeta {
     let sync: String = r.get(9).unwrap_or_else(|_| "LOCAL_ONLY".into());
     ScreenshotMeta {
@@ -472,6 +505,27 @@ impl Storage {
         Ok(aggregate_usage(&rows, idle_cap_secs))
     }
 
+    /// Total idle seconds since `since_iso`, from the SESSION_IDLE/SESSION_ACTIVE event
+    /// stream (feature #2). Each complete SESSION_IDLE → SESSION_ACTIVE pair contributes its
+    /// span; if the session is still idle now (a trailing SESSION_IDLE with no following
+    /// SESSION_ACTIVE), the open interval up to `now` is included. Pure read over already-
+    /// collected transition events.
+    pub fn idle_seconds_since(&self, since_iso: &str) -> Result<i64> {
+        let mut stmt = self.conn.prepare(
+            "SELECT event_type, timestamp_utc
+             FROM activity_events
+             WHERE event_type IN ('SESSION_IDLE','SESSION_ACTIVE') AND timestamp_utc >= ?1
+             ORDER BY id ASC",
+        )?;
+        let rows: Vec<(String, String)> = stmt
+            .query_map(params![since_iso], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(sum_idle(&rows, &now_utc_iso()))
+    }
+
     /// Device row for the dashboard (spec §32).
     pub fn device_row(&self) -> Result<Option<DeviceRow>> {
         let mut stmt = self.conn.prepare(
@@ -658,6 +712,21 @@ mod tests {
         assert_eq!(code.seconds, 60);
         // sorted desc by seconds
         assert_eq!(out[0].name, "chrome.exe");
+    }
+
+    #[test]
+    fn idle_sum_closes_pairs_and_trailing() {
+        // Two complete idle intervals (600s + 300s) and a trailing open idle closed at `now`.
+        let rows = vec![
+            ("SESSION_IDLE".to_string(),   "2026-08-11T10:00:00Z".to_string()),
+            ("SESSION_ACTIVE".to_string(), "2026-08-11T10:10:00Z".to_string()), // 600s
+            ("SESSION_IDLE".to_string(),   "2026-08-11T11:00:00Z".to_string()),
+            ("SESSION_ACTIVE".to_string(), "2026-08-11T11:05:00Z".to_string()), // 300s
+            ("SESSION_IDLE".to_string(),   "2026-08-11T12:00:00Z".to_string()), // open
+        ];
+        // now = 12:02:00Z closes the trailing idle at 120s.
+        let total = super::sum_idle(&rows, "2026-08-11T12:02:00Z");
+        assert_eq!(total, 600 + 300 + 120);
     }
 
     #[test]

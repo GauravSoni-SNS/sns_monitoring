@@ -50,6 +50,22 @@ export type AuditRow = {
 
 export type UsageItem = { name: string; seconds: number; sessions: number };
 
+export type UsbDevice = {
+  instance_id: string;
+  vendor_id?: string | null;
+  product_id?: string | null;
+  serial?: string | null;
+  description?: string | null;
+};
+
+export type AlertRow = {
+  severity: "high" | "medium" | "low";
+  kind: string;
+  message: string;
+  timestamp_utc: string;
+  event_id: string;
+};
+
 /** UTC ISO bounds for a date-range query. */
 export type Range = { from?: string; to?: string };
 
@@ -108,6 +124,9 @@ export const api = {
   config: () => json<{ agent: any; policy: any }>("/api/config"),
   usage: (kind: "app" | "browser", days: number) =>
     json<UsageItem[]>(`/api/usage?kind=${kind}&days=${days}`),
+  idle: (days: number) => json<{ idle_seconds: number; days: number }>(`/api/idle?days=${days}`),
+  alerts: (days: number) => json<AlertRow[]>(`/api/alerts?days=${days}`),
+  usbDevices: () => json<UsbDevice[]>("/api/usb-devices"),
   screenshotImageUrl: (id: string) => `/api/screenshots/${id}/image`,
   screenshotThumbUrl: (id: string) => `/api/screenshots/${id}/image?thumb=1`,
   async verifyIntegrity(): Promise<{ events_checked: number; invalid_records: number; pass: boolean; first_breaks: string[] }> {

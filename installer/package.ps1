@@ -24,7 +24,7 @@ foreach ($e in $exes) {
 function Fill-Bundle($dir) {
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
     foreach ($e in $exes) { Copy-Item (Join-Path $rel $e) $dir -Force }
-    foreach ($f in "install.ps1","uninstall.ps1","update-binaries.ps1","Install.cmd","Uninstall.cmd") {
+    foreach ($f in "install.ps1","uninstall.ps1","update-binaries.ps1","Install.cmd","Uninstall.cmd","alerts.example.json") {
         Copy-Item (Join-Path $PSScriptRoot $f) $dir -Force
     }
     @"
@@ -47,6 +47,13 @@ TO UNINSTALL:
   Double-click Uninstall.cmd  (or Windows "Add or remove programs").
 
 Data lives in C:\ProgramData\SNS\SecurityAgent (encrypted screenshots + SQLite).
+
+OPTIONAL - LOCAL ALERTS:
+  Copy alerts.example.json to
+    C:\ProgramData\SNS\SecurityAgent\config\alerts.json
+  and edit it (blocked apps/domains, working hours). No restart needed; the
+  Alerts panel view re-reads it on each load. If the file is absent, defaults
+  apply (USB connect + integrity failure).
 "@ | Set-Content (Join-Path $dir "README-INSTALL.txt") -Encoding UTF8
 }
 

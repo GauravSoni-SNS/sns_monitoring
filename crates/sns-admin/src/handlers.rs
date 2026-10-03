@@ -170,7 +170,7 @@ pub async fn system_events(
     let types = ["AGENT_STARTUP", "AGENT_SHUTDOWN", "SYSTEM_STARTUP", "SYSTEM_SHUTDOWN",
                  "USER_SESSION_STARTED", "USER_SESSION_ENDED", "USB_DEVICE_CONNECTED",
                  "USB_DEVICE_DISCONNECTED", "STORAGE_WARNING", "STORAGE_CRITICAL",
-                 "INTEGRITY_FAILURE", "CONFIGURATION_CHANGED"];
+                 "INTEGRITY_FAILURE", "CONFIGURATION_CHANGED", "SESSION_IDLE", "SESSION_ACTIVE"];
     match db(&state).and_then(|s| s.recent_activity(800, q.from.as_deref(), q.to.as_deref()).map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))) {
         Ok(rows) => {
             let filtered: Vec<_> = rows.into_iter().filter(|r| types.contains(&r.event_type.as_str())).collect();
@@ -230,6 +230,78 @@ pub async fn usage(
         Ok(rows) => Json(rows).into_response(),
         Err(r) => r,
     }
+}
+
+#[derive(Deserialize)]
+pub struct IdleQuery {
+    /// look-back window in days (default 1 = today-ish).
+    days: Option<u32>,
+}
+
+/// Total idle seconds over the look-back window (feature #2). Derived from the
+/// SESSION_IDLE/SESSION_ACTIVE transition events.
+pub async fn idle(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Query(q): axum::extract::Query<IdleQuery>,
+) -> Response {
+    if let Err(r) = require_auth(&state, &headers) {
+        return r;
+    }
+    let days = q.days.unwrap_or(1).min(365);
+    let since = sns_core::clock::iso_days_ago(days);
+    match db(&state).and_then(|s| {
+        s.idle_seconds_since(&since)
+            .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))
+    }) {
+        Ok(secs) => Json(serde_json::json!({ "idle_seconds": secs, "days": days })).into_response(),
+        Err(r) => r,
+    }
+}
+
+#[derive(Deserialize)]
+pub struct AlertsQuery {
+    /// look-back window in days (default 7).
+    days: Option<u32>,
+}
+
+/// Local alerts (feature #4): load the rules (config/alerts.json or defaults) and evaluate
+/// them over recent events. Read-only; no new capture, no network.
+pub async fn alerts(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Query(q): axum::extract::Query<AlertsQuery>,
+) -> Response {
+    if let Err(r) = require_auth(&state, &headers) {
+        return r;
+    }
+    let days = q.days.unwrap_or(7).min(365);
+    let since = sns_core::clock::iso_days_ago(days);
+    let rules = match sns_core::alerts::AlertRules::load_or_default(
+        state.data_root.join("config").join("alerts.json"),
+    ) {
+        Ok(r) => r,
+        Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+    match db(&state).and_then(|s| {
+        s.recent_activity(5000, Some(since.as_str()), None)
+            .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))
+    }) {
+        Ok(rows) => Json(sns_core::alerts::evaluate(&rules, &rows)).into_response(),
+        Err(r) => r,
+    }
+}
+
+/// Live inventory of USB devices currently connected (any class), with identity. Unlike the
+/// event stream (connect/disconnect, baselined at boot), this reflects the *present* set, so
+/// already-plugged devices (mouse/keyboard/etc.) are visible without a replug. Live read via
+/// SetupDi; no capture, no persistence.
+pub async fn usb_devices(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(r) = require_auth(&state, &headers) {
+        return r;
+    }
+    let devices = sns_core::collectors::usb::list_usb_devices();
+    Json(devices).into_response()
 }
 
 pub async fn storage(State(state): State<AppState>, headers: HeaderMap) -> Response {

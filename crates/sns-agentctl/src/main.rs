@@ -27,6 +27,7 @@ fn main() {
         "health" => cmd_health(),
         "diagnostics" => cmd_diagnostics(),
         "probe-url" => cmd_probe_url(),
+        "usb-list" => cmd_usb_list(),
         "help" | "--help" | "-h" => {
             print_help();
             0
@@ -50,6 +51,7 @@ fn print_help() {
          \n  verify-integrity   Recompute the event hash chain (spec §22)\
          \n  diagnostics        Paths, config validity, db reachability\
          \n  probe-url          Read the FOREGROUND browser's address bar once (verify UIA)\
+         \n  usb-list           List all USB devices currently connected (name, VID/PID/serial)\
          \n\nRead-only. Does not run collectors; the Windows Service does that."
     );
 }
@@ -219,4 +221,25 @@ fn cmd_probe_url() -> i32 {
             1
         }
     }
+}
+
+/// List every USB device currently connected (all classes), with identity. Same data the
+/// admin "USB Devices" view shows. Live read; no persistence.
+fn cmd_usb_list() -> i32 {
+    let devices = sns_core::collectors::usb::list_usb_devices();
+    if devices.is_empty() {
+        println!("no USB devices detected");
+        return 0;
+    }
+    println!("{} USB device(s) connected:\n", devices.len());
+    for d in &devices {
+        let name = d.description.as_deref().unwrap_or("(no name)");
+        let vid = d.vendor_id.as_deref().unwrap_or("----");
+        let pid = d.product_id.as_deref().unwrap_or("----");
+        let serial = d.serial.as_deref().unwrap_or("-");
+        println!("  {name}");
+        println!("      VID={vid}  PID={pid}  serial={serial}");
+        println!("      {}", d.instance_id);
+    }
+    0
 }

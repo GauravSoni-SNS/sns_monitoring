@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
 import {
   api, fmtBytes, fmtDuration, fmtTime, istRangeToUtc, istToday,
-  type ActivityRow, type AuditRow, type ScreenshotRow, type UsageItem, type Range,
+  type ActivityRow, type AuditRow, type ScreenshotRow, type UsageItem, type Range, type AlertRow, type UsbDevice,
 } from "./api";
 
 const NAV = [
   "Dashboard", "Usage Time", "Timeline", "Browser", "Screenshots",
-  "System Events", "Storage", "Audit Log", "Integrity", "Configuration",
+  "System Events", "USB Devices", "Alerts", "Storage", "Audit Log", "Integrity", "Configuration",
 ] as const;
 type View = (typeof NAV)[number];
 
@@ -84,6 +84,8 @@ function ViewRouter({ view }: { view: View }) {
     case "Timeline": return <ActivityTable fetcher={api.timeline} cols={["timestamp_utc", "event_type", "application_name", "window_title"]} />;
     case "Browser": return <ActivityTable fetcher={api.browser} cols={["timestamp_utc", "application_name", "window_title", "metadata_json"]} />;
     case "System Events": return <ActivityTable fetcher={api.systemEvents} cols={["timestamp_utc", "event_type", "metadata_json"]} />;
+    case "USB Devices": return <UsbDevices />;
+    case "Alerts": return <Alerts />;
     case "Screenshots": return <Screenshots />;
     case "Storage": return <Storage />;
     case "Audit Log": return <Audit />;
@@ -93,18 +95,19 @@ function ViewRouter({ view }: { view: View }) {
 }
 
 /* ------------------------------ helpers ------------------------------- */
-function useAsync<T>(fn: () => Promise<T>, deps: any[] = []): { data: T | null; err: string; loading: boolean } {
+function useAsync<T>(fn: () => Promise<T>, deps: any[] = []): { data: T | null; err: string; loading: boolean; reload: () => void } {
   const [data, setData] = useState<T | null>(null);
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(true);
+  const [tick, setTick] = useState(0);
   useEffect(() => {
     let alive = true;
     setLoading(true); setErr("");
     fn().then((d) => alive && setData(d)).catch((e) => alive && setErr(String(e.message || e))).finally(() => alive && setLoading(false));
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, deps);
-  return { data, err, loading };
+  }, [...deps, tick]);
+  return { data, err, loading, reload: () => setTick((t) => t + 1) };
 }
 
 function Card({ label, children, cls }: { label: string; children: any; cls?: string }) {
@@ -163,6 +166,7 @@ function Icon({ name, size = 18 }: { name: string; size?: number }) {
     case "check": return <svg {...p}><path d="M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3z" /><path d="M9 12l2 2 4-4" /></svg>;
     case "copy": return <svg {...p}><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5a2 2 0 012-2h10" /></svg>;
     case "done": return <svg {...p}><path d="M4 12l5 5L20 6" /></svg>;
+    case "moon": return <svg {...p}><path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z" /></svg>;
     default: return null;
   }
 }
@@ -213,6 +217,7 @@ function Metric({ icon, label, val, sub, meter }: { icon: string; label: string;
 /* ----------------------------- dashboard ------------------------------ */
 function Dashboard() {
   const { data, err, loading } = useAsync(() => api.device());
+  const idle = useAsync(() => api.idle(1));
   if (loading) return <div className="loading">Loading…</div>;
   if (err) return <div className="err">{err}</div>;
   const dev = data?.device, h = data?.health;
@@ -249,6 +254,9 @@ function Dashboard() {
           val={h ? `${fmtBytes(h.storage_used_bytes)} / ${fmtBytes(h.storage_max_bytes)}` : "—"}
           sub={`${pct}% used`} />
         <Metric icon="clock" label="Last event" val={fmtTime(h?.last_event_utc)} />
+        <Metric icon="moon" label="Idle today"
+          val={idle.data ? fmtDuration(idle.data.idle_seconds) : "—"}
+          sub="No keyboard/mouse" />
         <Metric icon="camera" label="Last screenshot" val={fmtTime(h?.last_screenshot_utc)} />
         <Metric icon="check" label="Integrity checked" val={fmtTime(h?.last_integrity_check_utc)}
           sub={integ == null ? undefined : integ ? "Chain valid" : "Chain broken"} />
@@ -350,6 +358,76 @@ function ActivityTable({ fetcher, cols }: { fetcher: (o?: Range) => Promise<Acti
         </table>
       </div>
       <DetailDrawer title="Event detail" item={sel} onClose={() => setSel(null)} />
+    </>
+  );
+}
+
+/* ---------------------------- usb inventory --------------------------- */
+function UsbDevices() {
+  const { data, err, loading, reload } = useAsync(() => api.usbDevices());
+  const rows: UsbDevice[] = data || [];
+  return (
+    <>
+      <div className="toolbar filters">
+        <button className="btn" onClick={reload}>Refresh</button>
+        <span className="muted">{rows.length} USB device{rows.length === 1 ? "" : "s"} currently connected (all classes)</span>
+      </div>
+      {loading ? <div className="loading">Loading…</div>
+        : err ? <div className="err">{err}</div>
+        : rows.length === 0 ? <div className="muted">No USB devices detected.</div>
+        : <div className="tablewrap"><table className="tbl">
+            <thead><tr><th>Description</th><th>VID</th><th>PID</th><th>Serial</th><th>Instance ID</th></tr></thead>
+            <tbody>
+              {rows.map((d) => (
+                <tr key={d.instance_id}>
+                  <td>{d.description || "—"}</td>
+                  <td>{d.vendor_id || "—"}</td>
+                  <td>{d.product_id || "—"}</td>
+                  <td>{d.serial || "—"}</td>
+                  <td className="mono small">{d.instance_id}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table></div>}
+    </>
+  );
+}
+
+/* ------------------------------- alerts ------------------------------- */
+function Alerts() {
+  const [days, setDays] = useState(7);
+  const { data, err, loading } = useAsync(() => api.alerts(days), [days]);
+  const rows: AlertRow[] = data || [];
+  const counts = rows.reduce((m, a) => ((m[a.severity] = (m[a.severity] || 0) + 1), m), {} as Record<string, number>);
+  return (
+    <>
+      <div className="toolbar filters">
+        <label className="fld">Window
+          <select value={days} onChange={(e) => setDays(Number(e.target.value))}>
+            <option value={1}>Today</option>
+            <option value={7}>Last 7 days</option>
+            <option value={30}>Last 30 days</option>
+          </select>
+        </label>
+        <span className="muted">
+          {rows.length} alert{rows.length === 1 ? "" : "s"}
+          {counts.high ? ` · ${counts.high} high` : ""}{counts.medium ? ` · ${counts.medium} medium` : ""}{counts.low ? ` · ${counts.low} low` : ""}
+        </span>
+      </div>
+      {loading ? <div className="loading">Loading…</div>
+        : err ? <div className="err">{err}</div>
+        : rows.length === 0 ? <div className="muted">No alerts in this window. Rules: USB connect, integrity failure, blocked apps/domains, after-hours (configure in <code>config/alerts.json</code>).</div>
+        : <div className="alerts">
+            {rows.map((a) => (
+              <div className={`alert sev-${a.severity}`} key={a.event_id + a.kind}>
+                <span className={`sev-badge sev-${a.severity}`}>{a.severity}</span>
+                <div className="a-body">
+                  <div className="a-msg">{a.message}</div>
+                  <div className="a-meta">{a.kind} · {fmtTime(a.timestamp_utc)}</div>
+                </div>
+              </div>
+            ))}
+          </div>}
     </>
   );
 }

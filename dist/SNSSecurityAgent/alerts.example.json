@@ -1,0 +1,7 @@
+{
+  "usb_connect": true,
+  "integrity_failure": true,
+  "blocked_apps": ["utorrent", "anydesk", "teamviewer"],
+  "blocked_domains": ["facebook.com", "torrent", "pastebin.com"],
+  "after_hours": { "work_start_hour": 9, "work_end_hour": 19 }
+}

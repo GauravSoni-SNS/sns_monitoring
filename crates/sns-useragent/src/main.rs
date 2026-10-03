@@ -23,6 +23,7 @@ use std::time::{Duration, Instant};
 
 use sns_core::collectors::application::{self, ApplicationCollector};
 use sns_core::collectors::browser::{BrowserCollector, Granularity};
+use sns_core::collectors::idle;
 use sns_core::collectors::screenshot;
 use sns_core::config::{AgentConfig, Policy};
 use sns_core::security::KeyManager;
@@ -71,12 +72,18 @@ fn main() -> anyhow::Result<()> {
         let mut app = ApplicationCollector::new(&cfg.device_id, policy.application.capture_window_title);
         let granularity = if policy.browser.granularity == "url" { Granularity::Url } else { Granularity::Domain };
         let browser = BrowserCollector::new(&cfg.device_id, granularity);
+        let mut idle = idle::IdleTracker::new();
 
         tracing::info!(device = %cfg.device_id, "user-session agent started");
         while !shutdown.load(Ordering::Relaxed) {
             // Foreground application (and browser, if the foreground is a browser).
             if policy.application.enabled {
                 sample_apps(&root, &policy, &mut app, &browser);
+            }
+
+            // Idle / active transitions (coarse presence; reads time-of-last-input only).
+            if policy.idle.enabled {
+                sample_idle(&root, &cfg.device_id, &policy, &mut idle);
             }
 
             // Screenshots on the configured interval.
@@ -132,6 +139,25 @@ fn sample_apps(
                     tracing::warn!(error = %e, "failed to drop browser record");
                 }
             }
+        }
+    }
+}
+
+/// Sample idle time and, on a state flip (active↔idle past the policy threshold), drop a
+/// SESSION_IDLE / SESSION_ACTIVE record. Reads only the time of the last input — never the
+/// input itself (no keystrokes/mouse/clipboard; spec §17).
+fn sample_idle(
+    root: &std::path::Path,
+    device_id: &str,
+    policy: &Policy,
+    idle: &mut idle::IdleTracker,
+) {
+    let secs = idle::idle_seconds();
+    if let Some(now_idle) = idle.update(secs, policy.idle.threshold_seconds) {
+        let ev = idle::build_event(device_id, now_idle, secs);
+        let stem = ev.event_id.clone();
+        if let Err(e) = dropbox::write_record(root, &stem, &DropRecord::Activity(ev)) {
+            tracing::warn!(error = %e, "failed to drop idle record");
         }
     }
 }

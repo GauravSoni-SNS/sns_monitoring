@@ -277,3 +277,25 @@ pre.json { background: var(--surface-2); border: 1px solid var(--line); border-r
   .bar-row { grid-template-columns: 120px 1fr 60px; }
   .drawer { width: 100%; }
 }
+
+/* ------------------------------- alerts ------------------------------- */
+.alerts { display: flex; flex-direction: column; gap: 10px; }
+.alert {
+  display: flex; align-items: flex-start; gap: 12px;
+  background: #fff; border: 1px solid var(--line);
+  border-left: 4px solid var(--line); border-radius: var(--radius);
+  padding: 12px 14px;
+}
+.alert.sev-high { border-left-color: var(--bad); background: var(--bad-soft); }
+.alert.sev-medium { border-left-color: var(--warn); background: var(--warn-soft); }
+.alert.sev-low { border-left-color: var(--muted); }
+.sev-badge {
+  text-transform: uppercase; font-size: 10px; font-weight: 700; letter-spacing: .04em;
+  padding: 3px 8px; border-radius: 999px; color: #fff; flex: none; margin-top: 1px;
+}
+.sev-badge.sev-high { background: var(--bad); }
+.sev-badge.sev-medium { background: var(--warn); }
+.sev-badge.sev-low { background: var(--muted); }
+.a-body { display: flex; flex-direction: column; gap: 2px; }
+.a-msg { color: var(--ink); font-weight: 600; }
+.a-meta { color: var(--muted); font-size: 12px; }

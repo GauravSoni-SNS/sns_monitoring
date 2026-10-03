@@ -47,6 +47,26 @@ Granularity (domain vs full URL) stays policy-controlled; default = domain. Veri
 > extension-based capture of another profile's data, or reconstructing history the browser
 > chose not to keep. Those are refused.
 
+### F. Idle / active-session tracking — ✅ DONE
+The user-session agent reads **seconds since the last input** (`GetLastInputInfo` — the
+*time* of last input only, never the input itself; no keystrokes/mouse/clipboard, spec §17)
+each tick and, via a pure `IdleTracker` state machine, emits `SESSION_IDLE` /
+`SESSION_ACTIVE` once per edge when the user crosses `policy.idle.threshold_seconds`
+(default 300). `Storage::idle_seconds_since` sums the idle intervals (closing a still-open
+idle at `now`); surfaced at `/api/idle` and as the **"Idle today"** dashboard metric, and the
+transitions show in **System Events**. Makes usage-time honest (time away is not active use).
+Policy field is `#[serde(default)]` so pre-existing `policy.json` files still load. Unit-tested
+(edge-once transitions, metadata, interval sum incl. trailing open idle).
+
+### G. Local alerting rules — ✅ DONE
+Pure, read-only rules engine (`sns_core::alerts`) evaluated over recent events — no new
+capture, no network. Rules load from `config/alerts.json` (optional; defaults if absent):
+**USB connect** (high), **integrity failure** (high), **blocked apps** / **blocked domains**
+(medium, case-insensitive substring, de-duplicated per name), and **after-hours** activity
+(low, flagged once per day against an IST working-hours window). `/api/alerts?days=N` returns
+matches newest-first (capped 200); shown in a new **Alerts** admin view with severity badges.
+Unit-tested (severity mapping, app/domain dedupe, after-hours per-day dedupe).
+
 ### D. Central sync + server (the original Phase-2 core)
 Agent → encrypted local store → secure API → PostgreSQL + object storage, per the
 architecture below. Idempotent upload keyed on the existing ULIDs; `sync_status` drives the

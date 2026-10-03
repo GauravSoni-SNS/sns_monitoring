@@ -86,6 +86,21 @@ pub struct Policy {
     pub storage: StoragePolicy,
     pub retention: RetentionPolicy,
     pub durability: DurabilityPolicy,
+    /// Idle/active tracking. `#[serde(default)]` so policy.json files written before this
+    /// field was added still load (back-compat).
+    #[serde(default = "default_idle")]
+    pub idle: IdlePolicy,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IdlePolicy {
+    pub enabled: bool,
+    /// Seconds of no keyboard/mouse input before the session is considered idle.
+    pub threshold_seconds: u64,
+}
+
+fn default_idle() -> IdlePolicy {
+    IdlePolicy { enabled: true, threshold_seconds: 300 }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -160,6 +175,11 @@ impl Policy {
         if self.storage.max_bytes == 0 {
             return Err(CoreError::Config("storage.max_bytes must be > 0".into()));
         }
+        if self.idle.enabled && self.idle.threshold_seconds < 30 {
+            return Err(CoreError::Config(
+                "idle.threshold_seconds must be >= 30".into(),
+            ));
+        }
         Ok(())
     }
 
@@ -179,6 +199,7 @@ impl Policy {
             storage: StoragePolicy { max_bytes: 10_737_418_240, warn_pct: 80, critical_pct: 90 },
             retention: RetentionPolicy { screenshot_days: 7, event_days: 30, delete_unsynced: false },
             durability: DurabilityPolicy { sqlite_synchronous: "NORMAL".into() },
+            idle: default_idle(),
         }
     }
 }

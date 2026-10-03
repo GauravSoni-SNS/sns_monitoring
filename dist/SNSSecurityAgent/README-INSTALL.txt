@@ -17,3 +17,10 @@ TO UNINSTALL:
   Double-click Uninstall.cmd  (or Windows "Add or remove programs").
 
 Data lives in C:\ProgramData\SNS\SecurityAgent (encrypted screenshots + SQLite).
+
+OPTIONAL - LOCAL ALERTS:
+  Copy alerts.example.json to
+    C:\ProgramData\SNS\SecurityAgent\config\alerts.json
+  and edit it (blocked apps/domains, working hours). No restart needed; the
+  Alerts panel view re-reads it on each load. If the file is absent, defaults
+  apply (USB connect + integrity failure).

@@ -6,6 +6,7 @@
 // clippy's large-err threshold. Intentional trade for readable diagnostics.
 #![allow(clippy::result_large_err)]
 
+pub mod alerts;
 pub mod clock;
 pub mod collectors;
 pub mod config;
