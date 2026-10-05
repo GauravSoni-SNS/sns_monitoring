@@ -305,10 +305,15 @@ impl Agent {
             }
         }
 
-        // Screenshots: age gate + heuristic.
+        // Screenshots: age gate + heuristic. `max_age_days == 0` disables the age gate so an
+        // accidental zero never wipes everything (the heuristic still runs if enabled).
         let sc = &retention.screenshot_cleanup;
-        let age_cut = sns_core::clock::iso_days_ago(sc.max_age_days);
-        let aged = self.storage.screenshots_for_cleanup(Some(&age_cut)).unwrap_or_default();
+        let aged = if sc.max_age_days == 0 {
+            Vec::new()
+        } else {
+            let age_cut = sns_core::clock::iso_days_ago(sc.max_age_days);
+            self.storage.screenshots_for_cleanup(Some(&age_cut)).unwrap_or_default()
+        };
         let aged_ids: std::collections::HashSet<String> = aged.iter().map(|(id, _)| id.clone()).collect();
         let mut path_of: std::collections::HashMap<String, String> =
             aged.iter().cloned().map(|(id, p)| (id, p)).collect();

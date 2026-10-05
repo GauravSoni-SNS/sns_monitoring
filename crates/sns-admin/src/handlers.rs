@@ -299,6 +299,50 @@ pub async fn alerts(
     }
 }
 
+/// Current alert rules (config/alerts.json or defaults), for the editor.
+pub async fn alert_rules(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(r) = require_auth(&state, &headers) {
+        return r;
+    }
+    match sns_core::alerts::AlertRules::load_or_default(state.data_root.join("config").join("alerts.json")) {
+        Ok(rules) => Json(rules).into_response(),
+        Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct AlertRulesUpdate {
+    csrf: String,
+    rules: sns_core::alerts::AlertRules,
+}
+
+/// Save alert rules to config/alerts.json. Audited. Re-read on each alerts evaluation.
+pub async fn update_alert_rules(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<AlertRulesUpdate>,
+) -> Response {
+    let token = match require_auth(&state, &headers) {
+        Ok(t) => t,
+        Err(r) => return r,
+    };
+    if !state.csrf_matches(&token, &body.csrf) {
+        return error(StatusCode::FORBIDDEN, "bad csrf token");
+    }
+    let path = state.data_root.join("config").join("alerts.json");
+    let bytes = match serde_json::to_vec_pretty(&body.rules) {
+        Ok(b) => b,
+        Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+    if let Err(e) = std::fs::write(&path, bytes) {
+        return error(StatusCode::INTERNAL_SERVER_ERROR, &format!("write alerts.json: {e}"));
+    }
+    if let Ok(s) = db(&state) {
+        let _ = s.audit("ALERT_RULES_CHANGED", Some("admin"), None);
+    }
+    Json(json!({ "ok": true })).into_response()
+}
+
 /// Live inventory of USB devices currently connected (any class), with identity. Unlike the
 /// event stream (connect/disconnect, baselined at boot), this reflects the *present* set, so
 /// already-plugged devices (mouse/keyboard/etc.) are visible without a replug. Live read via
@@ -419,12 +463,21 @@ pub async fn update_retention(
     Json(json!({ "ok": true })).into_response()
 }
 
-/// Run browser-history removal now, using the configured mode/domains/days. Deletes matching
-/// BROWSER_ACTIVITY rows and re-seals the chain. Audited.
+#[derive(Deserialize)]
+pub struct PurgeBrowserBody {
+    csrf: String,
+    /// Optional overrides from the form, so the admin can purge without saving policy first.
+    mode: Option<String>,
+    domains: Option<Vec<String>>,
+    days: Option<u32>,
+}
+
+/// Run browser-history removal now. Uses the form-supplied mode/domains/days if present,
+/// otherwise the saved policy. Deletes matching BROWSER_ACTIVITY rows and re-seals the chain.
 pub async fn purge_browser(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(body): Json<CsrfBody>,
+    Json(body): Json<PurgeBrowserBody>,
 ) -> Response {
     let token = match require_auth(&state, &headers) {
         Ok(t) => t,
@@ -437,7 +490,11 @@ pub async fn purge_browser(
         Ok(p) => p,
         Err(r) => return r,
     };
-    let br = &policy.retention.browser;
+    let def = &policy.retention.browser;
+    let mode = body.mode.clone().unwrap_or_else(|| def.mode.clone());
+    let domains = body.domains.clone().unwrap_or_else(|| def.domains.clone());
+    let days = body.days.unwrap_or(def.days);
+    let br = sns_core::config::BrowserRetention { mode, domains, days };
     if br.mode == "none" {
         return Json(json!({ "deleted": 0, "mode": "none" })).into_response();
     }
@@ -480,11 +537,16 @@ pub async fn purge_screenshots(
         Err(r) => return r,
     };
 
-    // 1) Age gate: everything older than max_age_days.
-    let age_cut = sns_core::clock::iso_days_ago(sc.max_age_days);
-    let aged = match writer.screenshots_for_cleanup(Some(&age_cut)) {
-        Ok(v) => v,
-        Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    // 1) Age gate: everything older than max_age_days. `0` = disabled (no age deletion) so a
+    // zero cannot accidentally wipe every screenshot — the heuristic (if on) still runs.
+    let aged = if sc.max_age_days == 0 {
+        Vec::new()
+    } else {
+        let age_cut = sns_core::clock::iso_days_ago(sc.max_age_days);
+        match writer.screenshots_for_cleanup(Some(&age_cut)) {
+            Ok(v) => v,
+            Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        }
     };
     let aged_ids: std::collections::HashSet<String> = aged.iter().map(|(id, _)| id.clone()).collect();
 

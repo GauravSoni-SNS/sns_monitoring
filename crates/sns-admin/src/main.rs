@@ -56,6 +56,7 @@ fn main() -> anyhow::Result<()> {
         .route("/api/usage", get(handlers::usage))
         .route("/api/idle", get(handlers::idle))
         .route("/api/alerts", get(handlers::alerts))
+        .route("/api/alert-rules", get(handlers::alert_rules).put(handlers::update_alert_rules))
         .route("/api/usb-devices", get(handlers::usb_devices))
         .route("/api/storage", get(handlers::storage))
         .route("/api/audit", get(handlers::audit))

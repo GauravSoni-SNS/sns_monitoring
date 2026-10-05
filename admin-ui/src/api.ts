@@ -126,6 +126,11 @@ export const api = {
     json<UsageItem[]>(`/api/usage?kind=${kind}&days=${days}`),
   idle: (days: number) => json<{ idle_seconds: number; days: number }>(`/api/idle?days=${days}`),
   alerts: (days: number) => json<AlertRow[]>(`/api/alerts?days=${days}`),
+  alertRules: () => json<any>("/api/alert-rules"),
+  async updateAlertRules(rules: any): Promise<void> {
+    const res = await req("/api/alert-rules", { method: "PUT", body: JSON.stringify({ csrf, rules }) });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+  },
   usbDevices: () => json<UsbDevice[]>("/api/usb-devices"),
   screenshotImageUrl: (id: string) => `/api/screenshots/${id}/image`,
   screenshotThumbUrl: (id: string) => `/api/screenshots/${id}/image?thumb=1`,
@@ -133,8 +138,8 @@ export const api = {
     const res = await req("/api/retention", { method: "PUT", body: JSON.stringify({ csrf, retention }) });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
   },
-  async purgeBrowser(): Promise<{ deleted: number; mode: string }> {
-    const res = await req("/api/retention/purge-browser", { method: "POST", body: JSON.stringify({ csrf }) });
+  async purgeBrowser(opts?: { mode?: string; domains?: string[]; days?: number }): Promise<{ deleted: number; mode: string }> {
+    const res = await req("/api/retention/purge-browser", { method: "POST", body: JSON.stringify({ csrf, ...(opts || {}) }) });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
     return res.json();
   },

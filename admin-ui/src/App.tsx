@@ -167,6 +167,7 @@ function Icon({ name, size = 18 }: { name: string; size?: number }) {
     case "copy": return <svg {...p}><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5a2 2 0 012-2h10" /></svg>;
     case "done": return <svg {...p}><path d="M4 12l5 5L20 6" /></svg>;
     case "moon": return <svg {...p}><path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z" /></svg>;
+    case "bell": return <svg {...p}><path d="M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.7 21a2 2 0 01-3.4 0" /></svg>;
     default: return null;
   }
 }
@@ -218,6 +219,7 @@ function Metric({ icon, label, val, sub, meter }: { icon: string; label: string;
 function Dashboard() {
   const { data, err, loading } = useAsync(() => api.device());
   const idle = useAsync(() => api.idle(1));
+  const alertsA = useAsync(() => api.alerts(7));
   if (loading) return <div className="loading">Loading…</div>;
   if (err) return <div className="err">{err}</div>;
   const dev = data?.device, h = data?.health;
@@ -257,6 +259,9 @@ function Dashboard() {
         <Metric icon="moon" label="Idle today"
           val={idle.data ? fmtDuration(idle.data.idle_seconds) : "—"}
           sub="No keyboard/mouse" />
+        <Metric icon="bell" label="Alerts (7 days)"
+          val={alertsA.data ? alertsA.data.length : "—"}
+          sub={alertsA.data ? `${alertsA.data.filter((a) => a.severity === "high").length} high` : undefined} />
         <Metric icon="camera" label="Last screenshot" val={fmtTime(h?.last_screenshot_utc)} />
         <Metric icon="check" label="Integrity checked" val={fmtTime(h?.last_integrity_check_utc)}
           sub={integ == null ? undefined : integ ? "Chain valid" : "Chain broken"} />
@@ -393,6 +398,62 @@ function UsbDevices() {
   );
 }
 
+/* ------------------------------ csv field ----------------------------- */
+/** Text input for a comma-separated list. Keeps the raw typed text (so commas/spaces don't
+ *  vanish mid-typing) and reports the parsed array up on each change. */
+function CsvField({ value, onChange, placeholder }: { value: string[]; onChange: (v: string[]) => void; placeholder?: string }) {
+  const [text, setText] = useState((value || []).join(", "));
+  // Re-sync when the upstream value changes identity (e.g. after a reload/save).
+  useEffect(() => { setText((value || []).join(", ")); }, [(value || []).join("\u0001")]);
+  return (
+    <input type="text" placeholder={placeholder} value={text}
+      onChange={(e) => {
+        setText(e.target.value);
+        onChange(e.target.value.split(",").map((s) => s.trim()).filter(Boolean));
+      }} />
+  );
+}
+
+/* --------------------------- alert rules editor ----------------------- */
+function AlertRulesEditor() {
+  const { data, loading, reload } = useAsync(() => api.alertRules());
+  const [r, setR] = useState<any>(null);
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { if (data) setR(JSON.parse(JSON.stringify(data))); }, [data]);
+  if (loading || !r) return null;
+  const ah = r.after_hours;
+  const save = async () => {
+    setBusy(true); setMsg("");
+    try { await api.updateAlertRules(r); setMsg("Rules saved."); reload(); }
+    catch (e: any) { setMsg("Error: " + (e.message || e)); }
+    finally { setBusy(false); }
+  };
+  return (
+    <details className="ruleseditor">
+      <summary>Edit alert rules</summary>
+      <div className="card retcard" style={{ marginTop: 10 }}>
+        {msg && <div className={msg.startsWith("Error") ? "err" : "ok-msg"}>{msg}</div>}
+        <label className="row2 chk"><input type="checkbox" checked={!!r.usb_connect} onChange={(e) => setR({ ...r, usb_connect: e.target.checked })} /><span>Alert on USB device connect</span></label>
+        <label className="row2 chk"><input type="checkbox" checked={!!r.integrity_failure} onChange={(e) => setR({ ...r, integrity_failure: e.target.checked })} /><span>Alert on integrity failure</span></label>
+        <label className="row2"><span>Blocked apps (comma-separated)</span>
+          <CsvField value={r.blocked_apps || []} placeholder="utorrent, anydesk" onChange={(v) => setR({ ...r, blocked_apps: v })} /></label>
+        <label className="row2"><span>Blocked domains (comma-separated)</span>
+          <CsvField value={r.blocked_domains || []} placeholder="facebook.com, torrent" onChange={(v) => setR({ ...r, blocked_domains: v })} /></label>
+        <label className="row2 chk"><input type="checkbox" checked={!!ah} onChange={(e) => setR({ ...r, after_hours: e.target.checked ? { work_start_hour: 9, work_end_hour: 19 } : null })} /><span>Flag after-hours activity</span></label>
+        {ah && (
+          <label className="row2"><span>Working hours (IST)</span>
+            <span style={{ display: "flex", gap: 6 }}>
+              <input type="number" min={0} max={23} value={ah.work_start_hour} onChange={(e) => setR({ ...r, after_hours: { ...ah, work_start_hour: Number(e.target.value) } })} style={{ minWidth: 70 }} />
+              <input type="number" min={0} max={24} value={ah.work_end_hour} onChange={(e) => setR({ ...r, after_hours: { ...ah, work_end_hour: Number(e.target.value) } })} style={{ minWidth: 70 }} />
+            </span></label>
+        )}
+        <button className="btn" disabled={busy} onClick={save}>{busy ? "Saving…" : "Save rules"}</button>
+      </div>
+    </details>
+  );
+}
+
 /* ------------------------------- alerts ------------------------------- */
 function Alerts() {
   const [days, setDays] = useState(7);
@@ -414,6 +475,7 @@ function Alerts() {
           {counts.high ? ` · ${counts.high} high` : ""}{counts.medium ? ` · ${counts.medium} medium` : ""}{counts.low ? ` · ${counts.low} low` : ""}
         </span>
       </div>
+      <AlertRulesEditor />
       {loading ? <div className="loading">Loading…</div>
         : err ? <div className="err">{err}</div>
         : rows.length === 0 ? <div className="muted">No alerts in this window. Rules: USB connect, integrity failure, blocked apps/domains, after-hours (configure in <code>config/alerts.json</code>).</div>
@@ -520,12 +582,14 @@ function Storage() {
   const purgeBrowser = async () => {
     if (!confirm("Delete matching browser history now? This re-seals the integrity chain and cannot be undone.")) return;
     setBusy("pb"); setMsg("");
-    try { const r = await api.purgeBrowser(); setMsg(`Browser purge: ${r.deleted} row(s) removed (mode: ${r.mode}).`); }
+    try { const r = await api.purgeBrowser({ mode: browser.mode, domains: browser.domains, days: browser.days }); setMsg(`Browser purge: ${r.deleted} row(s) removed (mode: ${r.mode}).`); }
     catch (e: any) { setMsg("Error: " + (e.message || e)); }
     finally { setBusy(""); }
   };
   const purgeShots = async () => {
-    if (!confirm("Run screenshot cleanup now? Deleted screenshots cannot be recovered.")) return;
+    const agePart = sc.max_age_days === 0 ? "age deletion is OFF" : `delete older than ${sc.max_age_days} day(s)`;
+    const heurPart = sc.heuristic_enabled ? ", plus blank/lock/duplicate frames" : "";
+    if (!confirm(`Run screenshot cleanup now?\n\nThis will ${agePart}${heurPart}.\nDeleted screenshots CANNOT be recovered.`)) return;
     setBusy("ps"); setMsg("");
     try { const r = await api.purgeScreenshots(); setMsg(`Screenshot cleanup: ${r.deleted} removed (${r.by_age} by age, ${r.by_heuristic} junk/dupes).`); reload(); }
     catch (e: any) { setMsg("Error: " + (e.message || e)); }
@@ -547,7 +611,8 @@ function Storage() {
       <section className="card retcard">
         <h4>Screenshot cleanup</h4>
         <label className="row2"><span>Delete older than (days)</span>
-          <input type="number" min={1} value={sc.max_age_days} onChange={(e) => setSc({ max_age_days: Number(e.target.value) })} /></label>
+          <input type="number" min={0} value={sc.max_age_days} onChange={(e) => setSc({ max_age_days: Number(e.target.value) })} /></label>
+        <div className="muted" style={{ fontSize: 12 }}><b>0 = disabled</b> (no age-based deletion). Deleted screenshots cannot be recovered.</div>
         <label className="row2 chk"><input type="checkbox" checked={!!sc.heuristic_enabled} onChange={(e) => setSc({ heuristic_enabled: e.target.checked })} />
           <span>Auto-drop lock-screen / blank / near-duplicate frames</span></label>
         <button className="btn ghost" disabled={busy === "ps"} onClick={purgeShots}>{busy === "ps" ? "Cleaning…" : "Clean screenshots now"}</button>
@@ -562,13 +627,15 @@ function Storage() {
             <option value="auto">Auto (all, by age)</option>
           </select></label>
         <label className="row2"><span>Older than (days)</span>
-          <input type="number" min={1} value={browser.days} onChange={(e) => setBrowser({ days: Number(e.target.value) })} /></label>
+          <input type="number" min={0} value={browser.days} onChange={(e) => setBrowser({ days: Number(e.target.value) })} /></label>
         {browser.mode === "selection" && (
           <label className="row2"><span>Domains (comma-separated)</span>
-            <input type="text" placeholder="google.com, youtube.com, music" value={(browser.domains || []).join(", ")}
-              onChange={(e) => setBrowser({ domains: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) })} /></label>
+            <CsvField value={browser.domains || []} placeholder="google.com, youtube.com, music" onChange={(v) => setBrowser({ domains: v })} /></label>
         )}
-        <div className="muted" style={{ fontSize: 12 }}>Deletion re-seals the tamper-evident chain (verify still passes).</div>
+        <div className="muted" style={{ fontSize: 12 }}>
+          Set <b>Older than = 0</b> to remove all matching history now (not just old entries).
+          Deletion re-seals the tamper-evident chain (verify still passes).
+        </div>
         <button className="btn ghost" disabled={busy === "pb" || browser.mode === "none"} onClick={purgeBrowser}>{busy === "pb" ? "Purging…" : "Purge browser history now"}</button>
       </section>
 

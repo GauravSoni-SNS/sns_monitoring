@@ -314,3 +314,8 @@ pre.json { background: var(--surface-2); border: 1px solid var(--line); border-r
 .row2.chk input { width: 16px; height: 16px; accent-color: var(--cherry); }
 .ok-msg { background: var(--ok-soft); color: var(--ok); border: 1px solid var(--ok);
   border-radius: var(--radius); padding: 10px 14px; font-weight: 600; grid-column: 1 / -1; }
+
+/* -------------------------- alert rules editor ------------------------ */
+.ruleseditor { margin-bottom: 14px; }
+.ruleseditor > summary { cursor: pointer; color: var(--cherry); font-weight: 600; font-size: 13.5px; user-select: none; }
+.ruleseditor > summary:hover { color: var(--cherry-deep); }
