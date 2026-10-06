@@ -39,6 +39,7 @@ windows-sys = { version = "0.59", features = [
     "Win32_Devices_DeviceAndDriverInstallation",
     "Win32_System_SystemInformation",
     "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_Graphics_Printing",
 ] }
 # UI Automation (COM) — read the foreground browser's on-screen address bar (feature C).
 # Live on-screen observation only; no history/credential/store access.

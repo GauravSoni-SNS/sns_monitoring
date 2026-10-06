@@ -26,6 +26,8 @@ pub trait Collector: Send {
 pub mod application;
 pub mod browser;
 pub mod idle;
+pub mod print;
 pub mod screenshot;
 pub mod system;
 pub mod usb;
+pub mod usbfiles;

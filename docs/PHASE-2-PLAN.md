@@ -84,6 +84,19 @@ automatic cleanup:
 Unit-tested: browser purge + re-seal keeps verify passing; fingerprint blank/dup detection;
 plan_cleanup drop/keep logic.
 
+### I. Exfil-adjacent monitoring (USB file-copy + print) — ✅ DONE
+Metadata-only watch (spec §16 — never file contents):
+- **USB file-copy** (`collectors::usbfiles`): the user-session agent snapshots removable-drive
+  file listings (name + size, capped at 20k files / depth 8), diffs every ~20s, and emits
+  `FILE_COPIED_TO_USB` for files that newly appear or grow. Baselined at start so pre-existing
+  files are not reported. Reads directory entries only — never opens/reads file data.
+- **Print jobs** (`collectors::print`): polls the Windows spooler (`EnumPrinters`/`EnumJobs`)
+  every ~5s and emits `DOCUMENT_PRINTED` (document name, printer, pages) once per job. Baselined
+  at start. Reads spooler job metadata only — never the rendered document.
+Policy toggles `exfil.usb_file_watch` / `exfil.print_watch` (serde-default on). Shown in a new
+**Transfers** admin view + **System Events**; new alert rules `usb_file_copy` (high) and
+`document_printed` (medium). Diff/tracker logic unit-tested.
+
 ### D. Central sync + server (the original Phase-2 core)
 Agent → encrypted local store → secure API → PostgreSQL + object storage, per the
 architecture below. Idempotent upload keyed on the existing ULIDs; `sync_status` drives the

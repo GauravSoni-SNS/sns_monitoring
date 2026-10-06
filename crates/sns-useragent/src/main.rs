@@ -24,7 +24,9 @@ use std::time::{Duration, Instant};
 use sns_core::collectors::application::{self, ApplicationCollector};
 use sns_core::collectors::browser::{BrowserCollector, Granularity};
 use sns_core::collectors::idle;
+use sns_core::collectors::print;
 use sns_core::collectors::screenshot;
+use sns_core::collectors::usbfiles;
 use sns_core::config::{AgentConfig, Policy};
 use sns_core::security::KeyManager;
 use sns_core::storage::dropbox::{self, DropRecord};
@@ -74,6 +76,17 @@ fn main() -> anyhow::Result<()> {
         let browser = BrowserCollector::new(&cfg.device_id, granularity);
         let mut idle = idle::IdleTracker::new();
 
+        // Exfil watch (metadata only). USB file snapshot baselined so pre-existing files are
+        // not reported as "copied"; only files written after start fire events.
+        let mut usb_snapshot = usbfiles::snapshot_removable();
+        let mut last_usb_scan = Instant::now();
+        let usb_scan_every = Duration::from_secs(20);
+        let mut print_tracker = print::PrintTracker::new();
+        // Baseline existing spooler jobs so only new ones after start are reported.
+        print_tracker.newly_seen(&print::current_jobs());
+        let mut last_print_scan = Instant::now();
+        let print_scan_every = Duration::from_secs(5);
+
         tracing::info!(device = %cfg.device_id, "user-session agent started");
         while !shutdown.load(Ordering::Relaxed) {
             // Foreground application (and browser, if the foreground is a browser).
@@ -84,6 +97,18 @@ fn main() -> anyhow::Result<()> {
             // Idle / active transitions (coarse presence; reads time-of-last-input only).
             if policy.idle.enabled {
                 sample_idle(&root, &cfg.device_id, &policy, &mut idle);
+            }
+
+            // Exfil: files written to removable drives (metadata only).
+            if policy.exfil.usb_file_watch && last_usb_scan.elapsed() >= usb_scan_every {
+                sample_usb_files(&root, &cfg.device_id, &mut usb_snapshot);
+                last_usb_scan = Instant::now();
+            }
+
+            // Exfil: documents sent to printers (metadata only).
+            if policy.exfil.print_watch && last_print_scan.elapsed() >= print_scan_every {
+                sample_print(&root, &cfg.device_id, &mut print_tracker);
+                last_print_scan = Instant::now();
             }
 
             // Screenshots on the configured interval.
@@ -158,6 +183,40 @@ fn sample_idle(
         let stem = ev.event_id.clone();
         if let Err(e) = dropbox::write_record(root, &stem, &DropRecord::Activity(ev)) {
             tracing::warn!(error = %e, "failed to drop idle record");
+        }
+    }
+}
+
+/// Re-snapshot removable drives and drop FILE_COPIED_TO_USB records for files that newly
+/// appeared or changed size. Metadata only (name + size); never reads file contents.
+fn sample_usb_files(
+    root: &std::path::Path,
+    device_id: &str,
+    prev: &mut usbfiles::UsbSnapshot,
+) {
+    let cur = usbfiles::snapshot_removable();
+    for f in usbfiles::diff_snapshots(prev, &cur) {
+        let ev = usbfiles::build_event(device_id, &f);
+        let stem = ev.event_id.clone();
+        if let Err(e) = dropbox::write_record(root, &stem, &DropRecord::Activity(ev)) {
+            tracing::warn!(error = %e, "failed to drop usb-file record");
+        }
+    }
+    *prev = cur;
+}
+
+/// Poll the print spooler and drop DOCUMENT_PRINTED records for new jobs. Metadata only
+/// (document name, printer, pages); never reads the document content.
+fn sample_print(
+    root: &std::path::Path,
+    device_id: &str,
+    tracker: &mut print::PrintTracker,
+) {
+    for j in tracker.newly_seen(&print::current_jobs()) {
+        let ev = print::build_event(device_id, &j);
+        let stem = ev.event_id.clone();
+        if let Err(e) = dropbox::write_record(root, &stem, &DropRecord::Activity(ev)) {
+            tracing::warn!(error = %e, "failed to drop print record");
         }
     }
 }

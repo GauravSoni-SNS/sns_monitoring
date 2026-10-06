@@ -6,7 +6,7 @@ import {
 
 const NAV = [
   "Dashboard", "Usage Time", "Timeline", "Browser", "Screenshots",
-  "System Events", "USB Devices", "Alerts", "Storage", "Audit Log", "Integrity", "Configuration",
+  "System Events", "USB Devices", "Transfers", "Alerts", "Storage", "Audit Log", "Integrity", "Configuration",
 ] as const;
 type View = (typeof NAV)[number];
 
@@ -85,6 +85,7 @@ function ViewRouter({ view }: { view: View }) {
     case "Browser": return <ActivityTable fetcher={api.browser} cols={["timestamp_utc", "application_name", "window_title", "metadata_json"]} />;
     case "System Events": return <ActivityTable fetcher={api.systemEvents} cols={["timestamp_utc", "event_type", "metadata_json"]} />;
     case "USB Devices": return <UsbDevices />;
+    case "Transfers": return <Transfers />;
     case "Alerts": return <Alerts />;
     case "Screenshots": return <Screenshots />;
     case "Storage": return <Storage />;
@@ -436,6 +437,10 @@ function AlertRulesEditor() {
         {msg && <div className={msg.startsWith("Error") ? "err" : "ok-msg"}>{msg}</div>}
         <label className="row2 chk"><input type="checkbox" checked={!!r.usb_connect} onChange={(e) => setR({ ...r, usb_connect: e.target.checked })} /><span>Alert on USB device connect</span></label>
         <label className="row2 chk"><input type="checkbox" checked={!!r.integrity_failure} onChange={(e) => setR({ ...r, integrity_failure: e.target.checked })} /><span>Alert on integrity failure</span></label>
+        <label className="row2 chk"><input type="checkbox" checked={r.usb_file_copy !== false} onChange={(e) => setR({ ...r, usb_file_copy: e.target.checked })} /><span>Alert on file copied to USB</span></label>
+        <label className="row2 chk"><input type="checkbox" checked={r.document_printed !== false} onChange={(e) => setR({ ...r, document_printed: e.target.checked })} /><span>Alert on document printed</span></label>
+        <label className="row2"><span>USB daily volume limit (MB, 0 = off)</span>
+          <input type="number" min={0} value={r.usb_daily_mb_limit || 0} onChange={(e) => setR({ ...r, usb_daily_mb_limit: Number(e.target.value) })} /></label>
         <label className="row2"><span>Blocked apps (comma-separated)</span>
           <CsvField value={r.blocked_apps || []} placeholder="utorrent, anydesk" onChange={(v) => setR({ ...r, blocked_apps: v })} /></label>
         <label className="row2"><span>Blocked domains (comma-separated)</span>
@@ -451,6 +456,62 @@ function AlertRulesEditor() {
         <button className="btn" disabled={busy} onClick={save}>{busy ? "Saving…" : "Save rules"}</button>
       </div>
     </details>
+  );
+}
+
+/* ------------------------------ transfers ----------------------------- */
+/** Exfil-adjacent events: files copied to USB + documents printed (metadata only). */
+function Transfers() {
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const range = istRangeToUtc(from || undefined, to || undefined);
+  const { data, err, loading } = useAsync(() => api.systemEvents(range), [from, to]);
+  const summary = useAsync(() => api.transferSummary(7));
+  const [sel, setSel] = useState<ActivityRow | null>(null);
+  const kinds = ["FILE_COPIED_TO_USB", "DOCUMENT_PRINTED"];
+  const rows = (data || []).filter((r) => kinds.includes(r.event_type));
+  const sm = summary.data;
+  const setToday = () => { const t = istToday(); setFrom(t); setTo(t); };
+  const clear = () => { setFrom(""); setTo(""); };
+  return (
+    <>
+      <div className="toolbar filters">
+        <div className="date-field"><label>From</label><input type="date" value={from} max={to || undefined} onChange={(e) => setFrom(e.target.value)} /></div>
+        <div className="date-field"><label>To</label><input type="date" value={to} min={from || undefined} onChange={(e) => setTo(e.target.value)} /></div>
+        <button className="btn ghost sm" onClick={setToday}>Today</button>
+        <button className="btn ghost sm" onClick={clear}>Clear</button>
+        <span className="muted">{loading ? "…" : `${rows.length} transfer event(s)`}</span>
+      </div>
+      {sm && sm.file_count > 0 && (
+        <div className="card" style={{ marginBottom: 14 }}>
+          <h4>USB data transferred (last 7 days)</h4>
+          <div className="val sm">{fmtBytes(sm.total_bytes)} across {sm.file_count} file{sm.file_count === 1 ? "" : "s"}</div>
+          <div className="kindchips">
+            {Object.entries(sm.by_kind).sort((a, b) => b[1] - a[1]).map(([k, v]) => (
+              <span className="kindchip" key={k}>{k}: {fmtBytes(v)}</span>
+            ))}
+          </div>
+        </div>
+      )}
+      {err && <div className="err">{err}</div>}
+      {!loading && rows.length === 0 && <div className="muted">No USB file-copy or print events in this range.</div>}
+      {rows.length > 0 && (
+        <div className="tablewrap"><table className="tbl">
+          <thead><tr><th>Time (IST)</th><th>Type</th><th>Detail</th><th style={{ width: 44 }}></th></tr></thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.event_id}>
+                <td className="mono">{fmtTime(r.timestamp_utc)}</td>
+                <td><span className="evtype">{r.event_type === "FILE_COPIED_TO_USB" ? "USB copy" : "Printed"}</span></td>
+                <td className="cellclip">{r.window_title || "—"}</td>
+                <td><InfoButton onClick={() => setSel(r)} /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table></div>
+      )}
+      <DetailDrawer title="Transfer detail" item={sel} onClose={() => setSel(null)} />
+    </>
   );
 }
 

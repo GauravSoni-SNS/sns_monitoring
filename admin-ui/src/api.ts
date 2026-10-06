@@ -132,6 +132,7 @@ export const api = {
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
   },
   usbDevices: () => json<UsbDevice[]>("/api/usb-devices"),
+  transferSummary: (days: number) => json<{ total_bytes: number; file_count: number; by_kind: Record<string, number> }>(`/api/transfer-summary?days=${days}`),
   screenshotImageUrl: (id: string) => `/api/screenshots/${id}/image`,
   screenshotThumbUrl: (id: string) => `/api/screenshots/${id}/image?thumb=1`,
   async updateRetention(retention: any): Promise<void> {

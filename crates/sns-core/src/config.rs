@@ -90,6 +90,24 @@ pub struct Policy {
     /// field was added still load (back-compat).
     #[serde(default = "default_idle")]
     pub idle: IdlePolicy,
+    /// Exfil-adjacent monitoring (USB file copies, print jobs). Metadata only.
+    #[serde(default)]
+    pub exfil: ExfilPolicy,
+}
+
+/// Exfil-adjacent monitoring. Watches for files written to removable drives and documents
+/// sent to printers. Records **metadata only** (name, size, pages, destination) — never file
+/// contents (spec §16).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExfilPolicy {
+    pub usb_file_watch: bool,
+    pub print_watch: bool,
+}
+
+impl Default for ExfilPolicy {
+    fn default() -> Self {
+        ExfilPolicy { usb_file_watch: true, print_watch: true }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -244,6 +262,7 @@ impl Policy {
             },
             durability: DurabilityPolicy { sqlite_synchronous: "NORMAL".into() },
             idle: default_idle(),
+            exfil: ExfilPolicy::default(),
         }
     }
 }

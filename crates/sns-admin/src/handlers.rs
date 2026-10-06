@@ -170,7 +170,8 @@ pub async fn system_events(
     let types = ["AGENT_STARTUP", "AGENT_SHUTDOWN", "SYSTEM_STARTUP", "SYSTEM_SHUTDOWN",
                  "USER_SESSION_STARTED", "USER_SESSION_ENDED", "USB_DEVICE_CONNECTED",
                  "USB_DEVICE_DISCONNECTED", "STORAGE_WARNING", "STORAGE_CRITICAL",
-                 "INTEGRITY_FAILURE", "CONFIGURATION_CHANGED", "SESSION_IDLE", "SESSION_ACTIVE"];
+                 "INTEGRITY_FAILURE", "CONFIGURATION_CHANGED", "SESSION_IDLE", "SESSION_ACTIVE",
+                 "FILE_COPIED_TO_USB", "DOCUMENT_PRINTED"];
     match db(&state).and_then(|s| s.recent_activity(800, q.from.as_deref(), q.to.as_deref()).map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))) {
         Ok(rows) => {
             let filtered: Vec<_> = rows.into_iter().filter(|r| types.contains(&r.event_type.as_str())).collect();
@@ -341,6 +342,44 @@ pub async fn update_alert_rules(
         let _ = s.audit("ALERT_RULES_CHANGED", Some("admin"), None);
     }
     Json(json!({ "ok": true })).into_response()
+}
+
+#[derive(Deserialize)]
+pub struct DaysQuery {
+    days: Option<u32>,
+}
+
+/// Transfer summary — total volume + per-kind breakdown of files copied to USB in the window.
+pub async fn transfer_summary(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Query(q): axum::extract::Query<DaysQuery>,
+) -> Response {
+    if let Err(r) = require_auth(&state, &headers) {
+        return r;
+    }
+    let days = q.days.unwrap_or(7).min(365);
+    let since = sns_core::clock::iso_days_ago(days);
+    let rows = match db(&state).and_then(|s| {
+        s.recent_activity(5000, Some(since.as_str()), None)
+            .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))
+    }) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    // Extract (path, size) from FILE_COPIED_TO_USB metadata.
+    let files: Vec<(String, u64)> = rows
+        .iter()
+        .filter(|r| r.event_type == "FILE_COPIED_TO_USB")
+        .filter_map(|r| {
+            let meta = r.metadata_json.as_deref()?;
+            let v: serde_json::Value = serde_json::from_str(meta).ok()?;
+            let path = v.get("path").and_then(|p| p.as_str()).unwrap_or("").to_string();
+            let size = v.get("size").and_then(|s| s.as_u64()).unwrap_or(0);
+            Some((path, size))
+        })
+        .collect();
+    Json(sns_core::collectors::usbfiles::summarize(&files)).into_response()
 }
 
 /// Live inventory of USB devices currently connected (any class), with identity. Unlike the

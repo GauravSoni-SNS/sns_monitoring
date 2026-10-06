@@ -40,6 +40,16 @@ pub struct AlertRules {
     /// Working hours (IST). Activity outside `[start, end)` is flagged once per day.
     #[serde(default)]
     pub after_hours: Option<AfterHours>,
+    /// Flag files written to removable drives (the data-exfil case).
+    #[serde(default = "d_true")]
+    pub usb_file_copy: bool,
+    /// Flag documents sent to a printer.
+    #[serde(default = "d_true")]
+    pub document_printed: bool,
+    /// Daily volume limit for data copied to USB, in MB. If the total copied to removable
+    /// drives in a day exceeds this, raise one high alert for that day. `0` = disabled.
+    #[serde(default)]
+    pub usb_daily_mb_limit: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,6 +66,9 @@ impl Default for AlertRules {
             blocked_apps: Vec::new(),
             blocked_domains: Vec::new(),
             after_hours: None,
+            usb_file_copy: true,
+            document_printed: true,
+            usb_daily_mb_limit: 0,
         }
     }
 }
@@ -105,8 +118,15 @@ pub fn evaluate(rules: &AlertRules, rows: &[ActivityRow]) -> Vec<Alert> {
     let mut seen_app: HashSet<String> = HashSet::new();
     let mut seen_domain: HashSet<String> = HashSet::new();
     let mut seen_afterhours_day: HashSet<String> = HashSet::new();
+    // Per-day total bytes copied to USB, for the volume-limit alert.
+    let mut usb_day_bytes: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
 
     for r in rows {
+        if rules.usb_daily_mb_limit > 0 && r.event_type == "FILE_COPIED_TO_USB" {
+            if let Some(size) = r.metadata_json.as_deref().and_then(usb_size_bytes) {
+                *usb_day_bytes.entry(date_part(&r.timestamp_utc).to_string()).or_insert(0) += size;
+            }
+        }
         match r.event_type.as_str() {
             "USB_DEVICE_CONNECTED" if rules.usb_connect => {
                 out.push(Alert {
@@ -115,6 +135,30 @@ pub fn evaluate(rules: &AlertRules, rows: &[ActivityRow]) -> Vec<Alert> {
                     message: format!(
                         "USB device connected: {}",
                         r.window_title.clone().or_else(|| r.metadata_json.clone()).unwrap_or_else(|| "(unknown)".into())
+                    ),
+                    timestamp_utc: r.timestamp_utc.clone(),
+                    event_id: r.event_id.clone(),
+                });
+            }
+            "FILE_COPIED_TO_USB" if rules.usb_file_copy => {
+                out.push(Alert {
+                    severity: Severity::High,
+                    kind: "usb_file_copy".into(),
+                    message: format!(
+                        "File written to removable drive: {}",
+                        r.window_title.clone().unwrap_or_else(|| "(unknown)".into())
+                    ),
+                    timestamp_utc: r.timestamp_utc.clone(),
+                    event_id: r.event_id.clone(),
+                });
+            }
+            "DOCUMENT_PRINTED" if rules.document_printed => {
+                out.push(Alert {
+                    severity: Severity::Medium,
+                    kind: "document_printed".into(),
+                    message: format!(
+                        "Document printed: {}",
+                        r.window_title.clone().unwrap_or_else(|| "(unknown)".into())
                     ),
                     timestamp_utc: r.timestamp_utc.clone(),
                     event_id: r.event_id.clone(),
@@ -175,9 +219,36 @@ pub fn evaluate(rules: &AlertRules, rows: &[ActivityRow]) -> Vec<Alert> {
         }
     }
 
+    // Daily USB volume-limit alerts (one per day over the limit).
+    if rules.usb_daily_mb_limit > 0 {
+        let limit_bytes = rules.usb_daily_mb_limit * 1_000_000;
+        for (day, bytes) in &usb_day_bytes {
+            if *bytes > limit_bytes {
+                out.push(Alert {
+                    severity: Severity::High,
+                    kind: "usb_volume".into(),
+                    message: format!(
+                        "High data volume copied to USB on {day}: {:.1} MB (limit {} MB)",
+                        *bytes as f64 / 1_000_000.0,
+                        rules.usb_daily_mb_limit
+                    ),
+                    timestamp_utc: format!("{day}T23:59:59+05:30"),
+                    event_id: format!("usbvol-{day}"),
+                });
+            }
+        }
+    }
+
     out.sort_by(|a, b| b.timestamp_utc.cmp(&a.timestamp_utc));
     out.truncate(200);
     out
+}
+
+/// Extract the `size` field (bytes) from a FILE_COPIED_TO_USB metadata JSON blob.
+fn usb_size_bytes(meta: &str) -> Option<u64> {
+    serde_json::from_str::<serde_json::Value>(meta)
+        .ok()
+        .and_then(|v| v.get("size").and_then(|s| s.as_u64()))
 }
 
 fn flag_after_hours(
@@ -235,13 +306,38 @@ mod tests {
     }
 
     #[test]
+    fn usb_volume_limit_fires_per_day() {
+        let mut rules = AlertRules::default();
+        rules.usb_connect = false;
+        rules.usb_file_copy = false; // isolate the volume alert
+        rules.usb_daily_mb_limit = 10; // 10 MB/day
+        let big = |id: &str, ts: &str, bytes: u64| ActivityRow {
+            event_id: id.into(),
+            event_type: "FILE_COPIED_TO_USB".into(),
+            timestamp_utc: ts.into(),
+            application_name: None,
+            window_title: Some("x".into()),
+            metadata_json: Some(format!("{{\"size\":{bytes}}}")),
+        };
+        let rows = vec![
+            big("f1", "2026-10-01T10:00:00+05:30", 6_000_000),
+            big("f2", "2026-10-01T11:00:00+05:30", 6_000_000), // day total 12 MB > 10
+            big("f3", "2026-10-02T10:00:00+05:30", 3_000_000), // day total 3 MB < 10
+        ];
+        let a = evaluate(&rules, &rows);
+        let vol: Vec<_> = a.iter().filter(|x| x.kind == "usb_volume").collect();
+        assert_eq!(vol.len(), 1); // only Oct-01 over limit
+        assert!(vol[0].message.contains("12.0 MB"));
+    }
+
+    #[test]
     fn blocked_app_and_domain_dedupe() {
         let rules = AlertRules {
             blocked_apps: vec!["steam".into()],
             blocked_domains: vec!["facebook.com".into()],
             usb_connect: false,
             integrity_failure: false,
-            after_hours: None,
+            after_hours: None, usb_file_copy: false, document_printed: false, usb_daily_mb_limit: 0,
         };
         let rows = vec![
             row("ACTIVE_APPLICATION_CHANGED", Some("steam.exe"), None, "2026-10-01T10:00:00+05:30", "a1"),
@@ -262,7 +358,7 @@ mod tests {
             integrity_failure: false,
             blocked_apps: vec![],
             blocked_domains: vec![],
-            after_hours: Some(AfterHours { work_start_hour: 9, work_end_hour: 18 }),
+            after_hours: Some(AfterHours { work_start_hour: 9, work_end_hour: 18 }), usb_file_copy: false, document_printed: false, usb_daily_mb_limit: 0,
         };
         let rows = vec![
             row("ACTIVE_APPLICATION_CHANGED", Some("code.exe"), None, "2026-10-01T22:00:00+05:30", "n1"),
