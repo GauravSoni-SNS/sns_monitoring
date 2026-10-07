@@ -1,0 +1,118 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 860" font-family="Segoe UI, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#c01f3d"/>
+    </marker>
+    <style>
+      .title{font-size:26px;font-weight:700;fill:#16181d}
+      .sub{font-size:14px;fill:#7c828d}
+      .box{fill:#ffffff;stroke:#e7e8ee;stroke-width:1.5;rx:12}
+      .cherry{fill:#fdecef;stroke:#e12a4a;stroke-width:1.5}
+      .hd{font-size:15px;font-weight:700;fill:#16181d}
+      .tx{font-size:12.5px;fill:#3d4149}
+      .mut{font-size:11.5px;fill:#7c828d}
+      .pill{fill:#e12a4a}
+      .pilltx{font-size:11px;font-weight:700;fill:#fff}
+      .step{font-size:13px;font-weight:700;fill:#c01f3d}
+      .edge{stroke:#c01f3d;stroke-width:2;fill:none;marker-end:url(#arrow)}
+      .edged{stroke:#c01f3d;stroke-width:2;fill:none;stroke-dasharray:5 4;marker-end:url(#arrow)}
+    </style>
+  </defs>
+
+  <text x="40" y="46" class="title">SNS — Organization Flow</text>
+  <text x="40" y="70" class="sub">How a business onboards, how team PCs sync, and how the boss sees everything — one org isolated from another.</text>
+
+  <!-- STEP 1: Business owner -->
+  <text x="40" y="118" class="step">1 · Business signs up</text>
+  <rect x="40" y="130" width="260" height="120" rx="12" class="box"/>
+  <circle cx="78" cy="166" r="16" class="cherry"/>
+  <text x="104" y="162" class="hd">Business Owner (Boss)</text>
+  <text x="104" y="182" class="tx">Buys SNS for their team</text>
+  <text x="60" y="214" class="tx">• Provisions an Org on the server</text>
+  <text x="60" y="233" class="tx">• Gets a one-time Enroll Token</text>
+
+  <!-- provision arrow to server -->
+  <path class="edge" d="M300 175 C 420 175, 470 175, 540 200"/>
+  <rect x="330" y="128" width="170" height="26" rx="13" class="pill"/>
+  <text x="415" y="146" text-anchor="middle" class="pilltx">provision-org CLI</text>
+
+  <!-- CENTRAL SERVER -->
+  <text x="560" y="118" class="step">Central Server (cloud · TLS)</text>
+  <rect x="540" y="130" width="330" height="200" rx="12" class="cherry"/>
+  <text x="560" y="160" class="hd">sns-server  (axum API)</text>
+  <text x="560" y="184" class="tx">PostgreSQL · multi-tenant (org_id on every row)</text>
+  <rect x="560" y="198" width="140" height="40" rx="8" class="box"/>
+  <text x="630" y="214" text-anchor="middle" class="mut">Org A</text>
+  <text x="630" y="230" text-anchor="middle" class="mut">devices · events</text>
+  <rect x="712" y="198" width="140" height="40" rx="8" class="box"/>
+  <text x="782" y="214" text-anchor="middle" class="mut">Org B</text>
+  <text x="782" y="230" text-anchor="middle" class="mut">(isolated)</text>
+  <text x="560" y="266" class="tx">• /devices/register  → per-device token</text>
+  <text x="560" y="285" class="tx">• /ingest/events     → idempotent (ULID)</text>
+  <text x="560" y="304" class="tx">• /admin/*           → org-scoped only</text>
+
+  <!-- STEP 2: install agents -->
+  <text x="40" y="320" class="step">2 · Install agent on each team PC (with Enroll Token)</text>
+
+  <!-- PC agents -->
+  <g>
+    <rect x="40" y="340" width="300" height="190" rx="12" class="box"/>
+    <text x="60" y="368" class="hd">Team PC #1 — Agent</text>
+    <text x="60" y="392" class="tx">Captures (disclosed policy):</text>
+    <text x="72" y="411" class="mut">apps · browser URL · screenshots</text>
+    <text x="72" y="428" class="mut">USB devices · file-to-USB · prints · idle</text>
+    <rect x="60" y="440" width="120" height="30" rx="7" class="cherry"/>
+    <text x="120" y="460" text-anchor="middle" class="mut">Encrypt + chain</text>
+    <rect x="190" y="440" width="120" height="30" rx="7" class="cherry"/>
+    <text x="250" y="460" text-anchor="middle" class="mut">Local queue</text>
+    <text x="60" y="495" class="tx">Works offline — syncs when online</text>
+    <text x="60" y="514" class="mut">Local panel still at 127.0.0.1:7731</text>
+  </g>
+
+  <g>
+    <rect x="40" y="548" width="300" height="120" rx="12" class="box"/>
+    <text x="60" y="576" class="hd">Team PC #2 … #N — Agent</text>
+    <text x="60" y="600" class="tx">Same capture + encrypt + queue + sync</text>
+    <text x="60" y="624" class="mut">Each registers once → own device token</text>
+    <text x="60" y="648" class="mut">All belong to the same Org</text>
+  </g>
+
+  <!-- STEP 3: sync arrows -->
+  <text x="360" y="420" class="step">3 · Sync</text>
+  <path class="edge" d="M340 450 C 430 450, 460 360, 540 300"/>
+  <text x="372" y="446" class="mut">HTTPS + device token</text>
+  <path class="edge" d="M340 600 C 440 600, 470 360, 540 310"/>
+  <text x="372" y="590" class="mut">encrypted events/screenshots</text>
+
+  <!-- STEP 4: dashboard -->
+  <text x="900" y="118" class="step">4 · Boss dashboard</text>
+  <rect x="900" y="130" width="240" height="330" rx="12" class="box"/>
+  <text x="920" y="158" class="hd">Central Dashboard</text>
+  <text x="920" y="178" class="mut">Boss logs in (org admin)</text>
+  <line x1="920" y1="190" x2="1120" y2="190" stroke="#eef0f4" stroke-width="1.5"/>
+  <text x="920" y="212" class="tx">All team PCs in one view:</text>
+  <rect x="920" y="224" width="200" height="26" rx="6" class="box"/><text x="930" y="241" class="mut">PC #1 · online · 2 alerts</text>
+  <rect x="920" y="256" width="200" height="26" rx="6" class="box"/><text x="930" y="273" class="mut">PC #2 · online</text>
+  <rect x="920" y="288" width="200" height="26" rx="6" class="box"/><text x="930" y="305" class="mut">PC #3 · offline 2h</text>
+  <text x="920" y="342" class="tx">Drill into any device:</text>
+  <text x="932" y="361" class="mut">timeline · usage · screenshots</text>
+  <text x="932" y="378" class="mut">USB transfers · prints · alerts</text>
+  <line x1="920" y1="392" x2="1120" y2="392" stroke="#eef0f4" stroke-width="1.5"/>
+  <text x="920" y="414" class="tx">Org isolation enforced:</text>
+  <text x="932" y="433" class="mut">boss sees only their org's PCs</text>
+  <text x="932" y="450" class="mut">never another business's data</text>
+
+  <!-- server to dashboard -->
+  <path class="edge" d="M870 220 C 885 220, 890 250, 900 270"/>
+
+  <!-- boundary note -->
+  <text x="40" y="712" class="step">Trust &amp; security boundary</text>
+  <rect x="40" y="724" width="1100" height="96" rx="12" class="cherry"/>
+  <text x="60" y="750" class="tx">• Data encrypted on the PC (AES-256-GCM) and hash-chained before it ever leaves — the server stores already-protected, tamper-evident records.</text>
+  <text x="60" y="772" class="tx">• Per-device bearer token (stored hashed) + TLS in transit. Boss auth = Argon2id + session/CSRF. Every query is org-scoped server-side.</text>
+  <text x="60" y="794" class="tx">• Metadata only for USB/print (names, sizes, pages) — never file contents. Authorized company-managed devices under a disclosed monitoring policy.</text>
+
+  <!-- stage legend -->
+  <text x="360" y="690" class="mut">Solid arrows = built in D.1 (server) · Dashed/next = D.2 agent sync + D.3 dashboard UI</text>
+  <path class="edged" d="M300 672 L 350 672"/>
+</svg>

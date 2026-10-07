@@ -93,6 +93,26 @@ pub struct Policy {
     /// Exfil-adjacent monitoring (USB file copies, print jobs). Metadata only.
     #[serde(default)]
     pub exfil: ExfilPolicy,
+    /// Central-server sync (Phase D). Off unless a server is configured.
+    #[serde(default)]
+    pub sync: SyncPolicy,
+}
+
+/// Central-server sync configuration. The agent registers once with `enroll_token`, stores the
+/// returned device token back into `device_token`, then uploads un-synced events on a cadence.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SyncPolicy {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Base URL of the central server, e.g. `https://sns.example.com`.
+    #[serde(default)]
+    pub server_url: String,
+    /// One-time org enroll token (used only until a device token is obtained).
+    #[serde(default)]
+    pub enroll_token: String,
+    /// Device bearer token, filled in by the agent after a successful registration.
+    #[serde(default)]
+    pub device_token: String,
 }
 
 /// Exfil-adjacent monitoring. Watches for files written to removable drives and documents
@@ -263,6 +283,7 @@ impl Policy {
             durability: DurabilityPolicy { sqlite_synchronous: "NORMAL".into() },
             idle: default_idle(),
             exfil: ExfilPolicy::default(),
+            sync: SyncPolicy::default(),
         }
     }
 }

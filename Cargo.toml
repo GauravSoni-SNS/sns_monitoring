@@ -7,6 +7,7 @@ members = [
     "crates/sns-useragent",
     "crates/sns-agentctl",
     "crates/sns-admin",
+    "crates/sns-server",
 ]
 
 [workspace.package]

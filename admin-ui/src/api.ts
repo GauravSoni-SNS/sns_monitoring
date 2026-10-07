@@ -133,6 +133,7 @@ export const api = {
   },
   usbDevices: () => json<UsbDevice[]>("/api/usb-devices"),
   transferSummary: (days: number) => json<{ total_bytes: number; file_count: number; by_kind: Record<string, number> }>(`/api/transfer-summary?days=${days}`),
+  transferApps: () => json<{ name: string; category: string }[]>("/api/transfer-apps"),
   screenshotImageUrl: (id: string) => `/api/screenshots/${id}/image`,
   screenshotThumbUrl: (id: string) => `/api/screenshots/${id}/image?thumb=1`,
   async updateRetention(retention: any): Promise<void> {

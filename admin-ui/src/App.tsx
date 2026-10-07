@@ -467,10 +467,12 @@ function Transfers() {
   const range = istRangeToUtc(from || undefined, to || undefined);
   const { data, err, loading } = useAsync(() => api.systemEvents(range), [from, to]);
   const summary = useAsync(() => api.transferSummary(7));
+  const apps = useAsync(() => api.transferApps());
   const [sel, setSel] = useState<ActivityRow | null>(null);
   const kinds = ["FILE_COPIED_TO_USB", "DOCUMENT_PRINTED"];
   const rows = (data || []).filter((r) => kinds.includes(r.event_type));
   const sm = summary.data;
+  const riskyApps = apps.data || [];
   const setToday = () => { const t = istToday(); setFrom(t); setTo(t); };
   const clear = () => { setFrom(""); setTo(""); };
   return (
@@ -491,6 +493,17 @@ function Transfers() {
               <span className="kindchip" key={k}>{k}: {fmtBytes(v)}</span>
             ))}
           </div>
+        </div>
+      )}
+      {riskyApps.length > 0 && (
+        <div className="card" style={{ marginBottom: 14 }}>
+          <h4>Data-transfer apps installed ({riskyApps.length})</h4>
+          <div className="kindchips">
+            {riskyApps.map((a) => (
+              <span className="kindchip" key={a.name} title={a.category}>{a.name} · {a.category}</span>
+            ))}
+          </div>
+          <div className="mut" style={{ fontSize: 11.5, marginTop: 8 }}>Presence only — remote-access, torrent, cloud-sync, messaging, file-transfer tools that could move data off this PC.</div>
         </div>
       )}
       {err && <div className="err">{err}</div>}

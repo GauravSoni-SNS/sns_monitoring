@@ -66,10 +66,14 @@ pub struct Agent {
     // Throttle for the heavier auto-cleanup (browser purge + screenshot heuristic): run at
     // most once per CLEANUP_INTERVAL. `None` until the first run.
     last_cleanup: Option<std::time::Instant>,
+    // Throttle for central-server sync (Phase D).
+    last_sync: Option<std::time::Instant>,
 }
 
 /// Minimum spacing between auto-cleanup passes (browser purge + screenshot cleanup).
 const CLEANUP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(6 * 3600);
+/// Spacing between central-server sync cycles.
+const SYNC_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// A session change observed by the service control handler (spec §5, §15). Machine-level,
 /// no auth secrets — just the numeric session id.
@@ -128,6 +132,7 @@ impl Agent {
             // (no spurious "connected" for devices already plugged at startup).
             prev_usb: usb::list_usb_devices(),
             last_cleanup: None,
+            last_sync: None,
         })
     }
 
@@ -276,9 +281,56 @@ impl Agent {
             self.last_cleanup = Some(std::time::Instant::now());
         }
 
+        // Central-server sync (Phase D), throttled.
+        if self.policy.sync.enabled {
+            let due = self.last_sync.map(|t| t.elapsed() >= SYNC_INTERVAL).unwrap_or(true);
+            if due {
+                self.run_sync();
+                self.last_sync = Some(std::time::Instant::now());
+            }
+        }
+
         if let Err(e) = self.publish_health(used) {
             tracing::warn!(error = %e, "failed to publish health snapshot");
         }
+    }
+
+    /// One central-server sync cycle: upload un-synced events. On first run (no device token
+    /// yet) it registers and persists the returned token to policy.json so later runs reuse it.
+    fn run_sync(&mut self) {
+        let mut new_token: Option<String> = None;
+        let result = crate::sync::run_once(
+            &self.policy.sync,
+            &self.storage,
+            &self.cfg.device_id,
+            &self.cfg.system_name,
+            &self.cfg.agent_version,
+            &mut new_token,
+        );
+        match result {
+            Ok(outcome) => {
+                if let Some(tok) = new_token {
+                    // Persist the device token so we don't re-register next cycle.
+                    self.policy.sync.device_token = tok;
+                    if let Err(e) = self.persist_policy() {
+                        tracing::warn!(error = %e, "failed to persist device token");
+                    }
+                }
+                if outcome.uploaded > 0 || outcome.registered {
+                    tracing::info!(uploaded = outcome.uploaded, registered = outcome.registered, "sync");
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "sync cycle failed"),
+        }
+    }
+
+    /// Write the current in-memory policy back to config/policy.json (used to save the device
+    /// token after registration).
+    fn persist_policy(&self) -> anyhow::Result<()> {
+        let path = self.data_root.join("config").join("policy.json");
+        let bytes = serde_json::to_vec_pretty(&self.policy)?;
+        std::fs::write(path, bytes)?;
+        Ok(())
     }
 
     /// Auto browser-history removal + screenshot cleanup per the current policy. Re-reads

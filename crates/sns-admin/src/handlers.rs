@@ -382,6 +382,15 @@ pub async fn transfer_summary(
     Json(sns_core::collectors::usbfiles::summarize(&files)).into_response()
 }
 
+/// Installed data-transfer apps detected on this machine (names + category). Live registry
+/// read; no app data/traffic is accessed.
+pub async fn transfer_apps(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(r) = require_auth(&state, &headers) {
+        return r;
+    }
+    Json(sns_core::collectors::transferapps::scan_installed()).into_response()
+}
+
 /// Live inventory of USB devices currently connected (any class), with identity. Unlike the
 /// event stream (connect/disconnect, baselined at boot), this reflects the *present* set, so
 /// already-plugged devices (mouse/keyboard/etc.) are visible without a replug. Live read via

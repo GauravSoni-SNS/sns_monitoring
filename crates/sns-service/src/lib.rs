@@ -3,6 +3,7 @@
 //! and the SCM host (`service_win`) use these same modules.
 
 pub mod agent;
+pub mod sync;
 
 #[cfg(windows)]
 pub mod service_win;

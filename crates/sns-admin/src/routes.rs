@@ -28,6 +28,7 @@ pub const ROUTES: &[Route] = &[
     Route { method: "GET", path: "/api/alerts", summary: "Local alert rules evaluated over recent events" },
     Route { method: "GET", path: "/api/usb-devices", summary: "Live inventory of connected USB devices (all classes)" },
     Route { method: "GET", path: "/api/transfer-summary", summary: "USB data-transfer volume + per-kind breakdown" },
+    Route { method: "GET", path: "/api/transfer-apps", summary: "Installed data-transfer apps (remote/torrent/cloud/…)" },
     Route { method: "GET", path: "/api/alert-rules", summary: "Current alert rules (alerts.json)" },
     Route { method: "PUT", path: "/api/alert-rules", summary: "Update alert rules (audited)" },
     // Storage / audit / integrity

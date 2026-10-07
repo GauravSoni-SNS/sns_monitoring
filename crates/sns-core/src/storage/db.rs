@@ -44,6 +44,19 @@ pub struct ActivityRow {
     pub metadata_json: Option<String>,
 }
 
+/// Wire shape for central-server upload (Phase D). Matches the server's `WireEvent`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SyncEvent {
+    pub event_id: String,
+    pub event_type: String,
+    pub timestamp_utc: String,
+    pub application_name: Option<String>,
+    pub window_title: Option<String>,
+    pub metadata_json: Option<String>,
+    pub event_hash: Option<String>,
+    pub previous_event_hash: Option<String>,
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AuditRow {
     pub action: String,
@@ -827,6 +840,47 @@ impl Storage {
         Ok(n)
     }
 
+    /// Events not yet pushed to the central server (Phase D), oldest first, up to `limit`.
+    /// Returns the wire fields including the chain hashes so the server can re-verify.
+    pub fn unsynced_events(&self, limit: u32) -> Result<Vec<SyncEvent>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT event_id, event_type, timestamp_utc, application_name, window_title,
+                    metadata_json, event_hash, previous_event_hash
+             FROM activity_events
+             WHERE sync_status = 'LOCAL_ONLY'
+             ORDER BY id ASC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map([limit], |r| {
+            Ok(SyncEvent {
+                event_id: r.get(0)?,
+                event_type: r.get(1)?,
+                timestamp_utc: r.get(2)?,
+                application_name: r.get(3)?,
+                window_title: r.get(4)?,
+                metadata_json: r.get(5)?,
+                event_hash: r.get(6)?,
+                previous_event_hash: r.get(7)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    /// Mark the given events as SYNCED after a successful server upload.
+    pub fn mark_events_synced(&self, event_ids: &[String]) -> Result<usize> {
+        let mut n = 0;
+        for id in event_ids {
+            n += self.conn.execute(
+                "UPDATE activity_events SET sync_status = 'SYNCED' WHERE event_id = ?1",
+                params![id],
+            )?;
+        }
+        Ok(n)
+    }
+
     /// Graceful-shutdown checkpoint (spec §6, §28). wal_checkpoint returns a status row,
     /// so query it rather than pragma_update.
     pub fn checkpoint_truncate(&self) -> Result<()> {
@@ -890,6 +944,24 @@ mod tests {
         // now = 12:02:00Z closes the trailing idle at 120s.
         let total = super::sum_idle(&rows, "2026-08-11T12:02:00Z");
         assert_eq!(total, 600 + 300 + 120);
+    }
+
+    #[test]
+    fn unsynced_queue_and_mark_synced() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("activity.db");
+        let mut s = Storage::open(&db, "dev_T", "NORMAL").unwrap();
+        s.upsert_device("SNS-PC-001", Some("HOST"), Some("Win"), "1.0.0").unwrap();
+        s.insert_activity_event(&ev("evt_1", "chrome.exe")).unwrap();
+        s.insert_activity_event(&ev("evt_2", "code.exe")).unwrap();
+
+        let pending = s.unsynced_events(100).unwrap();
+        assert_eq!(pending.len(), 2);
+        assert_eq!(pending[0].event_id, "evt_1"); // oldest first
+
+        let n = s.mark_events_synced(&["evt_1".into(), "evt_2".into()]).unwrap();
+        assert_eq!(n, 2);
+        assert!(s.unsynced_events(100).unwrap().is_empty());
     }
 
     #[test]

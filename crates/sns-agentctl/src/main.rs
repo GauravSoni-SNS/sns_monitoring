@@ -28,6 +28,8 @@ fn main() {
         "diagnostics" => cmd_diagnostics(),
         "probe-url" => cmd_probe_url(),
         "usb-list" => cmd_usb_list(),
+        "enroll" => cmd_enroll(),
+        "apps" => cmd_apps(),
         "help" | "--help" | "-h" => {
             print_help();
             0
@@ -52,6 +54,7 @@ fn print_help() {
          \n  diagnostics        Paths, config validity, db reachability\
          \n  probe-url          Read the FOREGROUND browser's address bar once (verify UIA)\
          \n  usb-list           List all USB devices currently connected (name, VID/PID/serial)\
+         \n  enroll             Configure central-server sync: --server <url> --token <enroll>\
          \n\nRead-only. Does not run collectors; the Windows Service does that."
     );
 }
@@ -218,6 +221,57 @@ fn cmd_probe_url() -> i32 {
         }
         None => {
             println!("no browser address bar in the foreground (focus a Chrome/Edge/Firefox tab and retry)");
+            1
+        }
+    }
+}
+
+/// List installed data-transfer apps detected on this machine (remote access, torrent,
+/// cloud sync, messaging, file-transfer tools). Reads only program names from the registry.
+fn cmd_apps() -> i32 {
+    let apps = sns_core::collectors::transferapps::scan_installed();
+    if apps.is_empty() {
+        println!("no known data-transfer apps detected");
+        return 0;
+    }
+    println!("{} data-transfer app(s) detected:\n", apps.len());
+    for a in &apps {
+        println!("  [{}] {}", a.category, a.name);
+    }
+    0
+}
+
+/// Configure central-server sync in policy.json: enable it, set server URL + enroll token.
+/// The service registers on its next cycle and persists the device token itself.
+fn cmd_enroll() -> i32 {
+    let args: Vec<String> = std::env::args().collect();
+    let get = |flag: &str| -> Option<String> {
+        args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1).cloned())
+    };
+    let (Some(server), Some(token)) = (get("--server"), get("--token")) else {
+        eprintln!("usage: sns-agentctl enroll --server <https://host> --token <enroll-token>");
+        return 2;
+    };
+    let path = data_root().join("config").join("policy.json");
+    let mut policy = match sns_core::config::Policy::load(&path) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("load policy: {e}");
+            return 1;
+        }
+    };
+    policy.sync.enabled = true;
+    policy.sync.server_url = server.trim_end_matches('/').to_string();
+    policy.sync.enroll_token = token;
+    policy.sync.device_token = String::new(); // force a fresh registration
+    match serde_json::to_vec_pretty(&policy).map_err(|e| e.to_string()).and_then(|b| std::fs::write(&path, b).map_err(|e| e.to_string())) {
+        Ok(_) => {
+            println!("Sync enabled → {}", policy.sync.server_url);
+            println!("The service will register and begin uploading within ~1 minute.");
+            0
+        }
+        Err(e) => {
+            eprintln!("write policy: {e}");
             1
         }
     }

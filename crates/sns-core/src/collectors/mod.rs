@@ -29,5 +29,6 @@ pub mod idle;
 pub mod print;
 pub mod screenshot;
 pub mod system;
+pub mod transferapps;
 pub mod usb;
 pub mod usbfiles;
