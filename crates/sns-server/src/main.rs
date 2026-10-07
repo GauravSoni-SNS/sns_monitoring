@@ -50,6 +50,7 @@ async fn main() -> anyhow::Result<()> {
 async fn serve(db: sqlx::PgPool) -> anyhow::Result<()> {
     let state = AppState { db, sessions: auth::Sessions::default() };
     let app = Router::new()
+        .route("/", get(handlers::dashboard))
         .route("/api/v1/healthz", get(handlers::healthz))
         .route("/api/v1/devices/register", post(handlers::register))
         .route("/api/v1/ingest/events", post(handlers::ingest_events))

@@ -82,5 +82,14 @@ events to the server over HTTPS (internet + LAN), authenticated per-device.
   Throttled to ~60s in the service maintenance loop. `sns-agentctl enroll --server <url>
   --token <enroll>` turns it on. Storage queue (`unsynced_events`/`mark_events_synced`) + batch
   logic unit-tested. (This is the agent's only outbound path; off unless configured.)
-- **D.2b — next:** screenshot blob upload to object storage (S3-compatible) + `blob_url`.
-- **D.3 — next:** central multi-device dashboard UI (boss login, all team PCs, drill-in).
+- **D.3 — ✅ DONE (verified live on Neon):** central dashboard served by `sns-server` at `/`
+  (single embedded page, no build step). Boss signs in (org-scoped) → KPIs (devices online/
+  offline) → device list → click a device → its events with type + IST date filters. Verified
+  end-to-end in a browser against the live Neon DB.
+- **D.2b — next:** central screenshots — agent re-encrypts each frame under an **org public key**
+  (boss holds the private key), uploads the blob to object storage; dashboard decrypts for the
+  boss. (Server never sees plaintext or the device's local key.)
+- **Capability adds (no driver needed):** MTP phone file-list (WPD COM), network transfer
+  volume per app (ETW), Bluetooth device identity (SetupDi).
+- **Later / optional:** desktop-app wrapper (Tauri) for the dashboard; WFP kernel driver to
+  *block* transfers (not just observe).

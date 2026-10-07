@@ -24,6 +24,11 @@ pub async fn healthz() -> Response {
     Json(json!({ "ok": true })).into_response()
 }
 
+/// The central dashboard (single embedded page; talks to the org-scoped admin API).
+pub async fn dashboard() -> Response {
+    axum::response::Html(include_str!("dashboard.html")).into_response()
+}
+
 // ------------------------------- device auth -------------------------------
 
 /// Resolve a Bearer device token → (org_id, device_pk). None if missing/invalid/revoked.

@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>SNS Central</title>
+<style>
+  :root{
+    --ink:#16181d;--ink2:#3d4149;--mut:#7c828d;--line:#e7e8ee;--line2:#eef0f4;
+    --cherry:#e12a4a;--cherry-deep:#c01f3d;--cherry-soft:#fdecef;--ring:rgba(225,42,74,.18);
+    --ok:#1a9e6b;--ok-soft:#e6f6ef;--warn:#c9821a;--bad:#d13030;--bad-soft:#fdeaea;--bg:#f6f7f9;--surf:#fff;--radius:12px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:"Segoe UI",system-ui,Arial,sans-serif;background:var(--bg);color:var(--ink)}
+  a{color:var(--cherry)}
+  .wrap{max-width:1200px;margin:0 auto;padding:0 16px}
+  header{background:var(--surf);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
+  header .wrap{display:flex;align-items:center;gap:12px;height:58px}
+  .logo{width:30px;height:30px;border-radius:8px;background:var(--cherry);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800}
+  .brand{font-weight:700}
+  .brand small{display:block;color:var(--mut);font-weight:500;font-size:11.5px}
+  .spacer{flex:1}
+  .btn{background:var(--cherry);color:#fff;border:1px solid var(--cherry);border-radius:9px;padding:9px 16px;font-size:13.5px;font-weight:600;cursor:pointer}
+  .btn:hover{background:var(--cherry-deep)}
+  .btn.ghost{background:#fff;color:var(--ink);border-color:var(--line)}
+  .btn.ghost:hover{border-color:var(--cherry);color:var(--cherry)}
+  .btn.sm{padding:6px 11px;font-size:12.5px;border-radius:8px}
+  input,select{padding:9px 11px;border:1px solid var(--line);border-radius:9px;font-size:13.5px;background:#fff;color:var(--ink)}
+  .card{background:var(--surf);border:1px solid var(--line);border-radius:var(--radius);padding:16px}
+  .muted{color:var(--mut);font-size:12.5px}
+  /* login */
+  .login{max-width:380px;margin:9vh auto;padding:28px}
+  .login h1{margin:0 0 4px;font-size:20px}
+  .login .field{margin-top:14px}
+  .login label{display:block;font-size:12.5px;color:var(--ink2);margin-bottom:5px}
+  .login input{width:100%}
+  .login .btn{width:100%;margin-top:18px}
+  .err{background:var(--bad-soft);color:var(--bad);border:1px solid var(--bad);border-radius:9px;padding:9px 12px;font-size:13px;margin-top:12px}
+  /* layout */
+  main{padding:22px 0}
+  .grid{display:grid;grid-template-columns:300px 1fr;gap:18px}
+  .kpis{display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap}
+  .kpi{background:var(--surf);border:1px solid var(--line);border-radius:var(--radius);padding:12px 16px;min-width:140px}
+  .kpi .n{font-size:22px;font-weight:700}
+  .kpi .l{color:var(--mut);font-size:12px}
+  .devlist{display:flex;flex-direction:column;gap:8px}
+  .dev{background:var(--surf);border:1px solid var(--line);border-left:3px solid var(--line);border-radius:10px;padding:11px 13px;cursor:pointer}
+  .dev:hover{border-color:var(--cherry)}
+  .dev.active{border-left-color:var(--cherry);background:var(--cherry-soft)}
+  .dev .nm{font-weight:600}
+  .dev .mt{color:var(--mut);font-size:11.5px;margin-top:2px}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
+  .dot.on{background:var(--ok)}.dot.off{background:var(--mut)}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{text-align:left;color:var(--mut);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.04em;padding:10px;border-bottom:1px solid var(--line)}
+  td{padding:10px;border-bottom:1px solid var(--line2);vertical-align:top}
+  tr:hover td{background:#fafbfc}
+  .mono{font-family:Consolas,ui-monospace,monospace;font-size:12px;color:var(--ink2)}
+  .tag{display:inline-block;background:var(--cherry-soft);color:var(--cherry-deep);border:1px solid var(--ring);border-radius:999px;padding:2px 9px;font-size:11px;font-weight:600}
+  .toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+  .hidden{display:none}
+  @media(max-width:820px){.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+const api = {
+  async login(email,password){
+    const r=await fetch("/api/v1/admin/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email,password})});
+    if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error||"login failed");
+    return r.json();
+  },
+  async devices(){ const r=await fetch("/api/v1/admin/devices"); if(r.status===401) throw new Error("unauthorized"); return r.json(); },
+  async events(q){
+    const p=new URLSearchParams(); if(q.device)p.set("device",q.device); if(q.event_type)p.set("event_type",q.event_type);
+    if(q.from)p.set("from",q.from); if(q.to)p.set("to",q.to);
+    const r=await fetch("/api/v1/admin/events?"+p.toString()); if(r.status===401) throw new Error("unauthorized"); return r.json();
+  },
+};
+const IST="Asia/Kolkata";
+function fmtTime(s){ if(!s) return "—"; const d=new Date(s.replace(" ","T")); if(isNaN(d)) return s;
+  return d.toLocaleString("en-IN",{timeZone:IST,year:"numeric",month:"short",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:true})+" IST"; }
+function online(last){ if(!last) return false; const d=new Date(last.replace(" ","T")); return (Date.now()-d.getTime())<5*60*1000; }
+function el(html){ const t=document.createElement("template"); t.innerHTML=html.trim(); return t.content.firstChild; }
+
+const app=document.getElementById("app");
+let state={devices:[],active:null,type:"",from:"",to:""};
+
+function loginView(msg){
+  app.innerHTML="";
+  const box=el(`<div class="card login">
+    <h1>SNS Central</h1>
+    <div class="muted">Sign in to your organization dashboard</div>
+    <div class="field"><label>Email</label><input id="em" type="email" placeholder="boss@company.com"/></div>
+    <div class="field"><label>Password</label><input id="pw" type="password" placeholder="••••••••"/></div>
+    <button class="btn" id="go">Sign in</button>
+    ${msg?`<div class="err">${msg}</div>`:""}
+  </div>`);
+  app.appendChild(box);
+  const submit=async()=>{
+    try{ await api.login(box.querySelector("#em").value,box.querySelector("#pw").value); dashboard(); }
+    catch(e){ loginView(e.message||"login failed"); }
+  };
+  box.querySelector("#go").onclick=submit;
+  box.querySelector("#pw").addEventListener("keydown",e=>{if(e.key==="Enter")submit();});
+}
+
+function header(){
+  return `<header><div class="wrap">
+    <div class="logo">S</div>
+    <div class="brand">SNS Central<small>organization dashboard</small></div>
+    <div class="spacer"></div>
+    <button class="btn ghost sm" id="refresh">Refresh</button>
+  </div></header>`;
+}
+
+async function dashboard(){
+  app.innerHTML=header()+`<main><div class="wrap">
+    <div class="kpis" id="kpis"></div>
+    <div class="grid">
+      <div><div class="muted" style="margin-bottom:8px">Devices</div><div class="devlist" id="devs"></div></div>
+      <div class="card" id="detail"></div>
+    </div>
+  </div></main>`;
+  app.querySelector("#refresh").onclick=loadDevices;
+  await loadDevices();
+}
+
+async function loadDevices(){
+  let devs;
+  try{ devs=await api.devices(); }catch(e){ return loginView("Session expired — sign in again."); }
+  state.devices=devs;
+  const on=devs.filter(d=>online(d.last_seen_at)).length;
+  app.querySelector("#kpis").innerHTML=
+    `<div class="kpi"><div class="n">${devs.length}</div><div class="l">Devices</div></div>
+     <div class="kpi"><div class="n">${on}</div><div class="l">Online</div></div>
+     <div class="kpi"><div class="n">${devs.length-on}</div><div class="l">Offline</div></div>`;
+  const list=app.querySelector("#devs"); list.innerHTML="";
+  if(!devs.length){ list.innerHTML=`<div class="muted">No devices enrolled yet.</div>`; }
+  devs.forEach(d=>{
+    const node=el(`<div class="dev ${state.active===d.device_id?"active":""}">
+      <div class="nm"><span class="dot ${online(d.last_seen_at)?"on":"off"}"></span>${d.system_name||d.device_id}</div>
+      <div class="mt">${d.hostname||"—"} · ${d.os_version||"—"}</div>
+      <div class="mt">last seen ${fmtTime(d.last_seen_at)}</div>
+    </div>`);
+    node.onclick=()=>{ state.active=d.device_id; loadDevices(); showDevice(d); };
+    list.appendChild(node);
+  });
+  const detail=app.querySelector("#detail");
+  if(state.active){ const d=devs.find(x=>x.device_id===state.active); if(d) showDevice(d); }
+  else detail.innerHTML=`<div class="muted">Select a device to see its activity across apps, browser, USB transfers, prints and alerts.</div>`;
+}
+
+async function showDevice(d){
+  const detail=app.querySelector("#detail");
+  detail.innerHTML=`<div style="font-weight:700;font-size:16px">${d.system_name||d.device_id}</div>
+    <div class="muted" style="margin:2px 0 14px">${d.hostname||"—"} · agent v${d.agent_version||"—"}</div>
+    <div class="toolbar">
+      <select id="ty">
+        <option value="">All events</option>
+        <option value="BROWSER_ACTIVITY">Browser</option>
+        <option value="ACTIVE_APPLICATION_CHANGED">Applications</option>
+        <option value="FILE_COPIED_TO_USB">USB file copy</option>
+        <option value="DOCUMENT_PRINTED">Printed</option>
+        <option value="USB_DEVICE_CONNECTED">USB connect</option>
+        <option value="SESSION_IDLE">Idle</option>
+      </select>
+      <input id="from" type="date"/><input id="to" type="date"/>
+      <button class="btn sm" id="apply">Apply</button>
+      <span class="muted" id="cnt"></span>
+    </div>
+    <div style="overflow:auto"><table><thead><tr><th>Time (IST)</th><th>Type</th><th>Detail</th></tr></thead><tbody id="rows"></tbody></table></div>`;
+  detail.querySelector("#ty").value=state.type;
+  detail.querySelector("#from").value=state.from;
+  detail.querySelector("#to").value=state.to;
+  const run=async()=>{
+    state.type=detail.querySelector("#ty").value;
+    state.from=detail.querySelector("#from").value;
+    state.to=detail.querySelector("#to").value;
+    const q={device:d.device_id,event_type:state.type||undefined};
+    if(state.from)q.from=state.from+"T00:00:00+05:30";
+    if(state.to){const [y,m,da]=state.to.split("-").map(Number);const dt=new Date(Date.UTC(y,m-1,da));dt.setUTCDate(dt.getUTCDate()+1);q.to=dt.toISOString().slice(0,10)+"T00:00:00+05:30";}
+    let rows; try{ rows=await api.events(q); }catch(e){ return loginView("Session expired — sign in again."); }
+    detail.querySelector("#cnt").textContent=rows.length+" event(s)";
+    const tb=detail.querySelector("#rows"); tb.innerHTML="";
+    if(!rows.length){ tb.innerHTML=`<tr><td colspan="3" class="muted">No events.</td></tr>`; }
+    rows.forEach(r=>{
+      const detailTxt=r.window_title||r.application_name||r.metadata_json||"—";
+      tb.appendChild(el(`<tr><td class="mono">${fmtTime(r.timestamp_utc)}</td><td><span class="tag">${r.event_type}</span></td><td>${escapeHtml(detailTxt)}</td></tr>`));
+    });
+  };
+  detail.querySelector("#apply").onclick=run;
+  run();
+}
+function escapeHtml(s){return String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+
+// Boot: try devices (cookie may already be valid), else login.
+(async()=>{ try{ await api.devices(); dashboard(); }catch(e){ loginView(); } })();
+</script>
+</body>
+</html>
