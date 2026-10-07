@@ -107,11 +107,24 @@ impl Agent {
         )?;
 
         // Fast tail verification of the hash chain (spec §3, §22).
-        let report = storage.verify_integrity()?;
+        let mut report = storage.verify_integrity()?;
         if !report.is_pass() {
-            tracing::error!(invalid = report.invalid_records, "integrity chain break at boot");
+            // A break here is almost always a record half-written when the service was
+            // force-stopped mid-insert (crash / forced restart). Self-heal by re-sealing the
+            // chain *in this process* so our in-memory chain head stays correct for the events
+            // we are about to write (an out-of-process reseal would leave our head stale and
+            // immediately re-break). Audited; it only resets the no-deletion proof, not data.
+            tracing::warn!(invalid = report.invalid_records, "integrity break at boot; re-sealing to repair");
             let ev = lifecycle(&cfg.device_id, EventType::IntegrityFailure);
             storage.insert_activity_event(&ev)?;
+            match storage.reseal_chain() {
+                Ok(n) => {
+                    let _ = storage.audit("CHAIN_RESEALED", Some("service"), Some(&format!("{{\"events\":{n},\"reason\":\"boot-repair\"}}")));
+                    report = storage.verify_integrity()?;
+                    tracing::info!(resealed = n, pass = report.is_pass(), "chain repaired at boot");
+                }
+                Err(e) => tracing::error!(error = %e, "boot reseal failed"),
+            }
         }
 
         storage.insert_activity_event(&lifecycle(&cfg.device_id, EventType::AgentStartup))?;

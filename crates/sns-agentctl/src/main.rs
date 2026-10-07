@@ -30,6 +30,7 @@ fn main() {
         "usb-list" => cmd_usb_list(),
         "enroll" => cmd_enroll(),
         "apps" => cmd_apps(),
+        "reseal" => cmd_reseal(),
         "help" | "--help" | "-h" => {
             print_help();
             0
@@ -55,6 +56,7 @@ fn print_help() {
          \n  probe-url          Read the FOREGROUND browser's address bar once (verify UIA)\
          \n  usb-list           List all USB devices currently connected (name, VID/PID/serial)\
          \n  enroll             Configure central-server sync: --server <url> --token <enroll>\
+         \n  reseal             Repair the hash chain after a crash-induced break (elevated)\
          \n\nRead-only. Does not run collectors; the Windows Service does that."
     );
 }
@@ -221,6 +223,42 @@ fn cmd_probe_url() -> i32 {
         }
         None => {
             println!("no browser address bar in the foreground (focus a Chrome/Edge/Firefox tab and retry)");
+            1
+        }
+    }
+}
+
+/// Repair the event hash chain by re-sealing it (recompute every link so verification passes
+/// again). Use after a crash/forced-stop left one record half-written. Requires write access
+/// to the database (run elevated). Note: re-sealing resets the "nothing removed since genesis"
+/// proof — only use it to recover from a benign break, not to hide a real change.
+fn cmd_reseal() -> i32 {
+    let root = data_root();
+    let cfg = match AgentConfig::load(root.join("config").join("agent.json")) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("load config: {e}");
+            return 1;
+        }
+    };
+    let mut storage = match Storage::open(root.join("database").join("activity.db"), &cfg.device_id, "NORMAL") {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("open db (run elevated?): {e}");
+            return 1;
+        }
+    };
+    let before = storage.verify_integrity().map(|r| r.is_pass()).unwrap_or(false);
+    match storage.reseal_chain() {
+        Ok(n) => {
+            let after = storage.verify_integrity().map(|r| r.is_pass()).unwrap_or(false);
+            println!("Re-sealed {n} events. Integrity before: {}  after: {}",
+                if before { "PASS" } else { "FAIL" }, if after { "PASS" } else { "FAIL" });
+            let _ = storage.audit("CHAIN_RESEALED", Some("agentctl"), Some(&format!("{{\"events\":{n}}}")));
+            if after { 0 } else { 1 }
+        }
+        Err(e) => {
+            eprintln!("reseal failed: {e}");
             1
         }
     }
