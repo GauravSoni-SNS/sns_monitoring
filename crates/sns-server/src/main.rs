@@ -11,6 +11,7 @@
 //! TLS is terminated by a reverse proxy (or add rustls); bind defaults to 0.0.0.0:8080.
 
 mod auth;
+mod blob;
 mod handlers;
 mod state;
 
@@ -54,9 +55,14 @@ async fn serve(db: sqlx::PgPool) -> anyhow::Result<()> {
         .route("/api/v1/healthz", get(handlers::healthz))
         .route("/api/v1/devices/register", post(handlers::register))
         .route("/api/v1/ingest/events", post(handlers::ingest_events))
+        .route("/api/v1/ingest/screenshot", post(handlers::ingest_screenshot))
         .route("/api/v1/admin/login", post(handlers::admin_login))
         .route("/api/v1/admin/devices", get(handlers::admin_devices))
         .route("/api/v1/admin/events", get(handlers::admin_events))
+        .route("/api/v1/admin/screenshots", get(handlers::admin_screenshots))
+        .route("/api/v1/admin/screenshots/:id/image", get(handlers::admin_screenshot_image))
+        // Screenshots can be a few MB; allow up to 16 MB request bodies.
+        .layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024))
         .with_state(state);
 
     let bind = env("SNS_SERVER_BIND", "0.0.0.0:8080");

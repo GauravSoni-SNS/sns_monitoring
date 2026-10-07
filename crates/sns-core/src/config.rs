@@ -113,6 +113,10 @@ pub struct SyncPolicy {
     /// Device bearer token, filled in by the agent after a successful registration.
     #[serde(default)]
     pub device_token: String,
+    /// Org screenshot key (hex), received at registration; used to re-encrypt screenshots
+    /// under the org key before upload so the server stores org-encrypted blobs.
+    #[serde(default)]
+    pub screenshot_key: String,
 }
 
 /// Exfil-adjacent monitoring. Watches for files written to removable drives and documents

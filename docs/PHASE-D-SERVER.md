@@ -86,9 +86,16 @@ events to the server over HTTPS (internet + LAN), authenticated per-device.
   (single embedded page, no build step). Boss signs in (org-scoped) → KPIs (devices online/
   offline) → device list → click a device → its events with type + IST date filters. Verified
   end-to-end in a browser against the live Neon DB.
-- **D.2b — next:** central screenshots — agent re-encrypts each frame under an **org public key**
-  (boss holds the private key), uploads the blob to object storage; dashboard decrypts for the
-  boss. (Server never sees plaintext or the device's local key.)
+- **D.2b / E2 — ✅ DONE (code; live round-trip on deploy):** central screenshots. Each org has a
+  symmetric **screenshot key** (issued to the agent at registration over TLS, backfilled for
+  existing orgs). The agent decrypts each screenshot with its local device key, **re-encrypts
+  under the org key** (AES-256-GCM, same nonce‖ct format), and uploads the blob to the server
+  (`POST /ingest/screenshot`, idempotent). The server stores the org-encrypted blob on disk
+  (`SNS_BLOB_DIR`) + metadata in Postgres, and the dashboard shows a **thumbnail grid per device**
+  → full image, decrypting server-side only for that org's admin (`/admin/screenshots`,
+  `/admin/screenshots/:id/image`). The device's local key never leaves the PC; the server holds
+  only the org key. Storage sync queue (`unsynced_screenshots`/`mark_screenshots_synced`) + blob
+  crypto round-trip unit-tested.
 - **Capability adds (no driver needed):** MTP phone file-list (WPD COM), network transfer
   volume per app (ETW), Bluetooth device identity (SetupDi).
 - **Later / optional:** desktop-app wrapper (Tauri) for the dashboard; WFP kernel driver to

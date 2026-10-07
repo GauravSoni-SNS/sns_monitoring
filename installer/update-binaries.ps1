@@ -33,24 +33,52 @@ foreach ($e in $exes) {
 }
 
 Write-Host "[1/4] Stopping service + tasks"
-Stop-Service $ServiceName -Force -ErrorAction SilentlyContinue
+# Disable the tasks first so Task Scheduler can't relaunch the capture/admin exes the instant
+# we kill them (that race is why a plain stop+kill fails to free the file). Use the cmdlets
+# (not schtasks.exe) and swallow "not running" — they must never abort the update.
 foreach ($t in "SNSSecurityCapture","SNSSecurityAdmin") {
-    Stop-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue
+    try { Disable-ScheduledTask -TaskName $t -ErrorAction Stop | Out-Null } catch {}
+    try { Stop-ScheduledTask    -TaskName $t -ErrorAction Stop | Out-Null } catch {}
 }
-# Give the processes a moment, then hard-stop any that still hold the exes.
-Start-Sleep -Milliseconds 500
-foreach ($p in "sns-useragent","sns-admin","sns-service") {
-    Get-Process $p -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Stop-Service $ServiceName -Force -ErrorAction SilentlyContinue
+# Wait for the service to reach Stopped (so it can't respawn its helper).
+for ($i = 0; $i -lt 20; $i++) {
+    $svc = Get-Service $ServiceName -ErrorAction SilentlyContinue
+    if (-not $svc -or $svc.Status -eq 'Stopped') { break }
+    Start-Sleep -Milliseconds 300
 }
-Start-Sleep -Milliseconds 500
+# Now kill any remaining agent processes; with tasks disabled they won't come back.
+$procNames = "sns-useragent","sns-admin","sns-service","sns-agentctl"
+for ($i = 0; $i -lt 10; $i++) {
+    $alive = Get-Process $procNames -ErrorAction SilentlyContinue
+    if (-not $alive) { break }
+    $alive | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 400
+}
 
 Write-Host "[2/4] Copying new binaries -> $InstallDir"
-foreach ($e in $exes) { Copy-Item (Join-Path $BinSource $e) $InstallDir -Force }
+foreach ($e in $exes) {
+    $src = Join-Path $BinSource $e
+    $dst = Join-Path $InstallDir $e
+    # Retry the copy in case a handle is still being released.
+    $copied = $false
+    for ($i = 0; $i -lt 10 -and -not $copied; $i++) {
+        try { Copy-Item $src $dst -Force -ErrorAction Stop; $copied = $true }
+        catch {
+            Get-Process $procNames -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Milliseconds 500
+        }
+    }
+    if (-not $copied) { throw "Could not replace $e - a process is still using it. Close any running SNS window and retry." }
+}
 
 Write-Host "[3/4] Restarting service"
 Start-Service $ServiceName
 
-Write-Host "[4/4] Restarting tasks"
+Write-Host "[4/4] Re-enabling + starting tasks"
+foreach ($t in "SNSSecurityCapture","SNSSecurityAdmin") {
+    try { Enable-ScheduledTask -TaskName $t -ErrorAction Stop | Out-Null } catch {}
+}
 Start-ScheduledTask -TaskName "SNSSecurityAdmin"    -ErrorAction SilentlyContinue
 Start-ScheduledTask -TaskName "SNSSecurityCapture"  -ErrorAction SilentlyContinue
 

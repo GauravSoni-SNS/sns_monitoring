@@ -311,26 +311,34 @@ impl Agent {
     /// One central-server sync cycle: upload un-synced events. On first run (no device token
     /// yet) it registers and persists the returned token to policy.json so later runs reuse it.
     fn run_sync(&mut self) {
-        let mut new_token: Option<String> = None;
+        let mut creds = crate::sync::NewCreds::default();
         let result = crate::sync::run_once(
             &self.policy.sync,
             &self.storage,
+            &self.keys,
             &self.cfg.device_id,
             &self.cfg.system_name,
             &self.cfg.agent_version,
-            &mut new_token,
+            &mut creds,
         );
         match result {
             Ok(outcome) => {
-                if let Some(tok) = new_token {
-                    // Persist the device token so we don't re-register next cycle.
+                let mut changed = false;
+                if let Some(tok) = creds.token {
                     self.policy.sync.device_token = tok;
+                    changed = true;
+                }
+                if let Some(k) = creds.screenshot_key {
+                    self.policy.sync.screenshot_key = k;
+                    changed = true;
+                }
+                if changed {
                     if let Err(e) = self.persist_policy() {
-                        tracing::warn!(error = %e, "failed to persist device token");
+                        tracing::warn!(error = %e, "failed to persist sync creds");
                     }
                 }
-                if outcome.uploaded > 0 || outcome.registered {
-                    tracing::info!(uploaded = outcome.uploaded, registered = outcome.registered, "sync");
+                if outcome.uploaded > 0 || outcome.screenshots > 0 || outcome.registered {
+                    tracing::info!(events = outcome.uploaded, screenshots = outcome.screenshots, registered = outcome.registered, "sync");
                 }
             }
             Err(e) => tracing::warn!(error = %e, "sync cycle failed"),

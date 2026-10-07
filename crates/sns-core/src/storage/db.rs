@@ -869,6 +869,30 @@ impl Storage {
         Ok(out)
     }
 
+    /// Screenshots not yet uploaded to the central server (oldest first).
+    pub fn unsynced_screenshots(&self, limit: u32) -> Result<Vec<ScreenshotMeta>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT screenshot_id, device_id, timestamp_utc, file_path, file_size, sha256,
+                    encryption_version, monitor_id, created_at, sync_status
+             FROM screenshots WHERE sync_status = 'LOCAL_ONLY'
+             ORDER BY id ASC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map([limit], |r| Ok(row_to_screenshot(r)))?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    /// Mark the given screenshots as SYNCED after a successful upload.
+    pub fn mark_screenshots_synced(&self, ids: &[String]) -> Result<usize> {
+        let mut n = 0;
+        for id in ids {
+            n += self.conn.execute(
+                "UPDATE screenshots SET sync_status = 'SYNCED' WHERE screenshot_id = ?1",
+                params![id],
+            )?;
+        }
+        Ok(n)
+    }
+
     /// Mark the given events as SYNCED after a successful server upload.
     pub fn mark_events_synced(&self, event_ids: &[String]) -> Result<usize> {
         let mut n = 0;

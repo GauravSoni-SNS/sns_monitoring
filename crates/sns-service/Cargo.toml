@@ -21,6 +21,7 @@ tracing-subscriber.workspace = true
 tracing-appender.workspace = true
 # Central-server sync (Phase D): blocking HTTPS client with rustls (no OpenSSL).
 ureq = { version = "2", features = ["tls", "json"] }
+hex.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 # SCM integration: registers/dispatches the Windows Service (spec §2, §3, §6).

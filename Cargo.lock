@@ -1916,6 +1916,7 @@ dependencies = [
 name = "sns-server"
 version = "1.0.0"
 dependencies = [
+ "aes-gcm",
  "anyhow",
  "argon2",
  "axum",
@@ -1939,6 +1940,7 @@ name = "sns-service"
 version = "1.0.0"
 dependencies = [
  "anyhow",
+ "hex",
  "serde",
  "serde_json",
  "sns-core",

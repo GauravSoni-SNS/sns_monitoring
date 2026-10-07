@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -106,8 +106,180 @@ pub async fn register(State(state): State<AppState>, Json(req): Json<RegisterReq
         return err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string());
     }
 
-    // Token is returned exactly once; the server keeps only its hash.
-    Json(json!({ "device_id": req.device_id, "token": token })).into_response()
+    // Ensure the org has a screenshot key and hand it to the agent (over TLS) so it can
+    // re-encrypt screenshots under it before upload.
+    let screenshot_key = match ensure_org_screenshot_key(&state, org_id).await {
+        Ok(k) => k,
+        Err(r) => return r,
+    };
+
+    // Token + screenshot key are returned exactly once; the server keeps only the token hash.
+    Json(json!({ "device_id": req.device_id, "token": token, "screenshot_key": screenshot_key })).into_response()
+}
+
+/// Return the org's screenshot key, generating + storing one if it doesn't have it yet.
+async fn ensure_org_screenshot_key(state: &AppState, org_id: i64) -> Result<String, Response> {
+    let existing: Option<Option<String>> =
+        sqlx::query_scalar("SELECT screenshot_key FROM orgs WHERE id = $1")
+            .bind(org_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    if let Some(Some(k)) = existing {
+        if !k.is_empty() {
+            return Ok(k);
+        }
+    }
+    // Generate a 32-byte key (hex) and store it.
+    let key = auth::generate_token(); // 32 random bytes, hex = 64 chars
+    sqlx::query("UPDATE orgs SET screenshot_key = $1 WHERE id = $2")
+        .bind(&key)
+        .bind(org_id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    Ok(key)
+}
+
+async fn org_screenshot_key(state: &AppState, org_id: i64) -> Option<String> {
+    sqlx::query_scalar::<_, Option<String>>("SELECT screenshot_key FROM orgs WHERE id = $1")
+        .bind(org_id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten()
+        .flatten()
+}
+
+// ---------------------------- screenshot ingest ----------------------------
+
+#[derive(Deserialize)]
+pub struct ScreenshotMeta {
+    pub screenshot_id: String,
+    pub timestamp_utc: String,
+    pub sha256: Option<String>,
+    pub file_size: Option<i64>,
+    pub monitor_id: Option<i32>,
+}
+
+/// Upload one screenshot: metadata in the query string, the org-encrypted blob as the raw body.
+pub async fn ingest_screenshot(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(meta): Query<ScreenshotMeta>,
+    body: axum::body::Bytes,
+) -> Response {
+    let Some((org_id, device_pk)) = device_principal(&state, &headers).await else {
+        return err(StatusCode::UNAUTHORIZED, "invalid device token");
+    };
+    // Idempotent: skip if we already have this screenshot for the org.
+    let exists: Option<i64> = sqlx::query_scalar(
+        "SELECT id FROM screenshots WHERE org_id = $1 AND screenshot_id = $2",
+    )
+    .bind(org_id)
+    .bind(&meta.screenshot_id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+    if exists.is_some() {
+        return Json(json!({ "accepted": false, "duplicate": true })).into_response();
+    }
+    if let Err(e) = crate::blob::store(&meta.screenshot_id, &body) {
+        return err(StatusCode::INTERNAL_SERVER_ERROR, &format!("blob: {e}"));
+    }
+    let res = sqlx::query(
+        "INSERT INTO screenshots (org_id, device_pk, screenshot_id, timestamp_utc, sha256, file_size, monitor_id, blob_url)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+         ON CONFLICT (org_id, screenshot_id) DO NOTHING",
+    )
+    .bind(org_id)
+    .bind(device_pk)
+    .bind(&meta.screenshot_id)
+    .bind(&meta.timestamp_utc)
+    .bind(&meta.sha256)
+    .bind(meta.file_size)
+    .bind(meta.monitor_id)
+    .bind(format!("file://{}", meta.screenshot_id))
+    .execute(&state.db)
+    .await;
+    match res {
+        Ok(_) => Json(json!({ "accepted": true })).into_response(),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+pub struct ShotRow {
+    pub screenshot_id: String,
+    pub device_id: String,
+    pub timestamp_utc: String,
+    pub file_size: Option<i64>,
+    pub monitor_id: Option<i32>,
+}
+
+pub async fn admin_screenshots(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<EventsQuery>,
+) -> Response {
+    let Some(org_id) = admin_org(&state, &headers) else {
+        return err(StatusCode::UNAUTHORIZED, "unauthorized");
+    };
+    let mut qb = sqlx::QueryBuilder::<sqlx::Postgres>::new(
+        "SELECT s.screenshot_id, d.device_id, s.timestamp_utc, s.file_size, s.monitor_id
+         FROM screenshots s JOIN devices d ON d.id = s.device_pk WHERE s.org_id = ",
+    );
+    qb.push_bind(org_id);
+    if let Some(dev) = &q.device {
+        qb.push(" AND d.device_id = ").push_bind(dev.clone());
+    }
+    if let Some(f) = &q.from {
+        qb.push(" AND s.timestamp_utc >= ").push_bind(f.clone());
+    }
+    if let Some(t) = &q.to {
+        qb.push(" AND s.timestamp_utc < ").push_bind(t.clone());
+    }
+    qb.push(" ORDER BY s.timestamp_utc DESC LIMIT 300");
+    match qb.build_query_as::<ShotRow>().fetch_all(&state.db).await {
+        Ok(rows) => Json(rows).into_response(),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
+/// Decrypt + serve one screenshot PNG for the org's admin.
+pub async fn admin_screenshot_image(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let Some(org_id) = admin_org(&state, &headers) else {
+        return err(StatusCode::UNAUTHORIZED, "unauthorized");
+    };
+    // Confirm the screenshot belongs to this org.
+    let owned: Option<i64> = sqlx::query_scalar(
+        "SELECT id FROM screenshots WHERE org_id = $1 AND screenshot_id = $2",
+    )
+    .bind(org_id)
+    .bind(&id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+    if owned.is_none() {
+        return err(StatusCode::NOT_FOUND, "not found");
+    }
+    let Some(key) = org_screenshot_key(&state, org_id).await else {
+        return err(StatusCode::INTERNAL_SERVER_ERROR, "no org key");
+    };
+    let blob = match crate::blob::load(&id) {
+        Ok(b) => b,
+        Err(_) => return err(StatusCode::NOT_FOUND, "blob missing"),
+    };
+    match crate::blob::decrypt(&key, &blob) {
+        Some(png) => ([(header::CONTENT_TYPE, "image/png")], png).into_response(),
+        None => err(StatusCode::INTERNAL_SERVER_ERROR, "decrypt failed"),
+    }
 }
 
 // ------------------------------- event ingest ------------------------------
