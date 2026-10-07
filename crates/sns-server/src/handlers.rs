@@ -24,6 +24,14 @@ pub async fn healthz() -> Response {
     Json(json!({ "ok": true })).into_response()
 }
 
+/// Latest agent version + download URL, for agent auto-update checks. Configured via
+/// SNS_AGENT_VERSION / SNS_AGENT_URL env (so ops can publish a new build without a rebuild).
+pub async fn agent_version() -> Response {
+    let version = std::env::var("SNS_AGENT_VERSION").unwrap_or_else(|_| "1.0.0".into());
+    let url = std::env::var("SNS_AGENT_URL").unwrap_or_default();
+    Json(json!({ "version": version, "url": url })).into_response()
+}
+
 /// The central dashboard (single embedded page; talks to the org-scoped admin API).
 pub async fn dashboard() -> Response {
     axum::response::Html(include_str!("dashboard.html")).into_response()
@@ -58,6 +66,96 @@ pub struct RegisterReq {
     pub agent_version: Option<String>,
 }
 
+#[derive(Deserialize)]
+pub struct SignupReq {
+    pub org_name: String,
+    pub admin_email: String,
+    pub admin_password: String,
+}
+
+/// Self-serve org signup: creates the business, its boss admin, a trial license, and returns
+/// a one-time device enroll token. This is how a customer onboards without the CLI.
+pub async fn signup(State(state): State<AppState>, Json(req): Json<SignupReq>) -> Response {
+    if req.org_name.trim().is_empty() || !req.admin_email.contains('@') || req.admin_password.len() < 8 {
+        return err(StatusCode::BAD_REQUEST, "org name, a valid email, and an 8+ char password are required");
+    }
+    // Email must be unique across the system (one login per person).
+    let taken: Option<i64> = sqlx::query_scalar("SELECT id FROM admin_users WHERE email = $1")
+        .bind(&req.admin_email)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten();
+    if taken.is_some() {
+        return err(StatusCode::CONFLICT, "that email is already registered");
+    }
+    let enroll_token = auth::generate_token();
+    let org_id = match sqlx::query_scalar::<_, i64>(
+        "INSERT INTO orgs (name, enroll_token_hash) VALUES ($1,$2) RETURNING id",
+    )
+    .bind(req.org_name.trim())
+    .bind(auth::sha256_hex(&enroll_token))
+    .fetch_one(&state.db)
+    .await
+    {
+        Ok(id) => id,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+    let phc = match auth::hash_password(&req.admin_password) {
+        Ok(h) => h,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+    if let Err(e) = sqlx::query("INSERT INTO admin_users (org_id, email, password_hash, role) VALUES ($1,$2,$3,'admin')")
+        .bind(org_id).bind(&req.admin_email).bind(&phc).execute(&state.db).await
+    {
+        return err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string());
+    }
+    // 14-day trial, 5 seats.
+    let _ = sqlx::query(
+        "INSERT INTO licenses (org_id, plan, seats, status, trial_ends)
+         VALUES ($1,'trial',5,'active', now() + interval '14 days')",
+    )
+    .bind(org_id)
+    .execute(&state.db)
+    .await;
+    Json(json!({ "ok": true, "org_id": org_id, "enroll_token": enroll_token })).into_response()
+}
+
+/// Seat / license gate: Ok(()) if a NEW device may enroll, Err(reason) otherwise. Existing
+/// devices (re-register) always pass. Orgs with no license row are treated as unlimited
+/// (CLI-provisioned before licensing existed).
+async fn license_allows_new_device(state: &AppState, org_id: i64) -> Result<(), String> {
+    let lic = sqlx::query_as::<_, (String, i32, String, Option<time::OffsetDateTime>)>(
+        "SELECT plan, seats, status, trial_ends FROM licenses WHERE org_id = $1",
+    )
+    .bind(org_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| e.to_string())?;
+    let Some((plan, seats, status, trial_ends)) = lic else {
+        return Ok(()); // no license row → unlimited (legacy/CLI org)
+    };
+    if status != "active" {
+        return Err("license suspended".into());
+    }
+    if plan == "trial" {
+        if let Some(ends) = trial_ends {
+            if ends < time::OffsetDateTime::now_utc() {
+                return Err("trial expired".into());
+            }
+        }
+    }
+    let used: i64 = sqlx::query_scalar("SELECT count(*) FROM devices WHERE org_id = $1")
+        .bind(org_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| e.to_string())?;
+    if used >= seats as i64 {
+        return Err(format!("seat limit reached ({seats}); upgrade your plan"));
+    }
+    Ok(())
+}
+
 /// Enroll a device into its org (identified by the enroll token) and issue a device token.
 /// Idempotent on (org_id, device_id): re-registering updates the row and issues a fresh token.
 pub async fn register(State(state): State<AppState>, Json(req): Json<RegisterReq>) -> Response {
@@ -70,6 +168,23 @@ pub async fn register(State(state): State<AppState>, Json(req): Json<RegisterReq
         Ok(None) => return err(StatusCode::UNAUTHORIZED, "invalid enroll token"),
         Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     };
+
+    // Seat / license gate for a NEW device (existing devices re-register freely).
+    let is_new: bool = sqlx::query_scalar::<_, i64>(
+        "SELECT id FROM devices WHERE org_id = $1 AND device_id = $2",
+    )
+    .bind(org_id)
+    .bind(&req.device_id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten()
+    .is_none();
+    if is_new {
+        if let Err(reason) = license_allows_new_device(&state, org_id).await {
+            return err(StatusCode::FORBIDDEN, &reason);
+        }
+    }
 
     let device_pk = match sqlx::query_scalar::<_, i64>(
         "INSERT INTO devices (org_id, device_id, system_name, hostname, os_version, agent_version, last_seen_at)
@@ -149,6 +264,37 @@ async fn org_screenshot_key(state: &AppState, org_id: i64) -> Option<String> {
         .ok()
         .flatten()
         .flatten()
+}
+
+/// License + seat usage for the org's dashboard.
+pub async fn admin_license(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let Some(org_id) = admin_org(&state, &headers) else {
+        return err(StatusCode::UNAUTHORIZED, "unauthorized");
+    };
+    let lic = sqlx::query_as::<_, (String, i32, String, Option<String>)>(
+        "SELECT plan, seats, status, trial_ends::text FROM licenses WHERE org_id = $1",
+    )
+    .bind(org_id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+    let used: i64 = sqlx::query_scalar("SELECT count(*) FROM devices WHERE org_id = $1")
+        .bind(org_id)
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or(0);
+    match lic {
+        Some((plan, seats, status, trial_ends)) => Json(json!({
+            "plan": plan, "seats": seats, "status": status, "trial_ends": trial_ends, "used": used
+        })).into_response(),
+        None => Json(json!({ "plan": "unlimited", "seats": null, "status": "active", "used": used })).into_response(),
+    }
+}
+
+/// The self-serve signup page.
+pub async fn signup_page() -> Response {
+    axum::response::Html(include_str!("signup.html")).into_response()
 }
 
 // ---------------------------- screenshot ingest ----------------------------

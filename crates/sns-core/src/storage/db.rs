@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use rusqlite::{params, Connection, OpenFlags};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use sns_shared::events::ActivityEvent;
 use sns_shared::models::ScreenshotMeta;
 use sns_shared::sync::SyncStatus;
@@ -838,6 +838,23 @@ impl Storage {
             n += self.conn.execute("DELETE FROM screenshots WHERE screenshot_id = ?1", params![id])?;
         }
         Ok(n)
+    }
+
+    /// The most recent lifecycle event type (startup/shutdown). Used at boot to tell whether
+    /// the previous run ended cleanly (`AGENT_SHUTDOWN`/`SYSTEM_SHUTDOWN`) or was killed
+    /// (last lifecycle event is `AGENT_STARTUP` with no matching shutdown ⇒ tamper/forced stop).
+    pub fn last_lifecycle_event(&self) -> Result<Option<String>> {
+        let v: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT event_type FROM activity_events
+                 WHERE event_type IN ('AGENT_STARTUP','AGENT_SHUTDOWN','SYSTEM_SHUTDOWN')
+                 ORDER BY id DESC LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(v)
     }
 
     /// Events not yet pushed to the central server (Phase D), oldest first, up to `limit`.

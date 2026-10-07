@@ -171,7 +171,7 @@ pub async fn system_events(
                  "USER_SESSION_STARTED", "USER_SESSION_ENDED", "USB_DEVICE_CONNECTED",
                  "USB_DEVICE_DISCONNECTED", "STORAGE_WARNING", "STORAGE_CRITICAL",
                  "INTEGRITY_FAILURE", "CONFIGURATION_CHANGED", "SESSION_IDLE", "SESSION_ACTIVE",
-                 "FILE_COPIED_TO_USB", "DOCUMENT_PRINTED"];
+                 "FILE_COPIED_TO_USB", "DOCUMENT_PRINTED", "TAMPER_SUSPECTED"];
     match db(&state).and_then(|s| s.recent_activity(800, q.from.as_deref(), q.to.as_deref()).map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))) {
         Ok(rows) => {
             let filtered: Vec<_> = rows.into_iter().filter(|r| types.contains(&r.event_type.as_str())).collect();

@@ -59,6 +59,25 @@ charging customers, in priority order.
 ### E8. Branding / GTM
 - Product name, logo, one-page site, pricing tiers (e.g. per-seat/month), demo org.
 
+## STATUS (build progress)
+- **E1 — partial:** agent `/api/v1/agent/version` auto-update check (server) + WiX MSI authoring
+  (`installer/wix/`) done. **Code-signing cert + final MSI build = owner's procurement step.**
+- **E2 — ✅ done:** central screenshots (org-key encrypted, dashboard grid). See PHASE-D-SERVER.md.
+- **E3 — ✅ done + verified live:** self-serve org signup (`/signup`), trial licensing (14-day /
+  5-seat), seat enforcement at enrollment, admin license view.
+- **E4 — ✅ done:** TLS reverse proxy (`deploy/Caddyfile`), backup script (`deploy/backup.ps1`),
+  server deploy steps in DEPLOYMENT-GUIDE.
+- **E5 — drafts done:** EULA / privacy / monitoring-consent templates (`docs/legal/`) — **owner's
+  lawyer must finalize.**
+- **E6 — ✅ done:** tamper detection (unclean-stop → `TAMPER_SUSPECTED` + high alert) + service
+  auto-restart (SC failure actions, already in installer).
+- **E7 — ✅ done:** `docs/DEPLOYMENT-GUIDE.md` (server + onboard + agent + mass deploy).
+- **E8 — pending:** branding/pricing/site (owner).
+
+**Remaining to ship = owner actions:** buy code-signing cert → build+sign MSI (E1); finalize legal
+docs with counsel (E5); pick pricing/branding (E8); run a multi-PC pilot (E7). All the software is
+built.
+
 ## Suggested MVP-to-GA cut
 **MVP to start selling:** E1 (signed MSI) + E2 (central screenshots) + E3 (licensing/signup) +
 E4 (hosted TLS server) + E5 (legal docs). E6/E7/E8 harden and polish in parallel / fast-follow.

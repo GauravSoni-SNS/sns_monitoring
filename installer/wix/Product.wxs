@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- WiX v4 MSI authoring for the SNS agent. Build + sign (see installer/wix/README.md):
+       wix build Product.wxs -o SNSSecurityAgent.msi
+       signtool sign /fd SHA256 /a /tr http://timestamp.digicert.com /td SHA256 SNSSecurityAgent.msi
+     Silent deploy: msiexec /i SNSSecurityAgent.msi /qn SYSTEMNAME=PC-001 ADMINPASS=Secret ENROLL=<token> SERVER=https://sns.example.com
+     Binaries are staged next to this file (dist\SNSSecurityAgent\*.exe) before building. -->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="SNS Endpoint Security Agent" Manufacturer="{{VENDOR_NAME}}"
+           Version="1.0.0.0" UpgradeCode="7C3B2A10-5E44-4F9B-9A2C-1D6E3F8B0A11"
+           Scope="perMachine">
+    <MajorUpgrade DowngradeErrorMessage="A newer version is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- Public properties set from the msiexec command line for silent mass deployment. -->
+    <Property Id="SYSTEMNAME" Secure="yes" />
+    <Property Id="ADMINPASS" Secure="yes" Hidden="yes" />
+    <Property Id="ENROLL" Secure="yes" Hidden="yes" />
+    <Property Id="SERVER" Secure="yes" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLDIR" Name="SNS">
+        <Directory Id="AGENTDIR" Name="SecurityAgent">
+          <Component Id="Binaries" Guid="*">
+            <File Id="svc" Source="dist\SNSSecurityAgent\sns-service.exe" KeyPath="yes" />
+            <File Id="ua"  Source="dist\SNSSecurityAgent\sns-useragent.exe" />
+            <File Id="ctl" Source="dist\SNSSecurityAgent\sns-agentctl.exe" />
+            <File Id="adm" Source="dist\SNSSecurityAgent\sns-admin.exe" />
+          </Component>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="Main">
+      <ComponentRef Id="Binaries" />
+    </Feature>
+
+    <!-- Run the existing PowerShell install steps as a deferred custom action (service +
+         tasks + ACLs + init), passing the public properties. Author the CA per your WiX
+         version; the reference logic is installer/install.ps1. -->
+    <!-- <CustomAction Id="RunInstall" .../> -->
+  </Package>
+</Wix>

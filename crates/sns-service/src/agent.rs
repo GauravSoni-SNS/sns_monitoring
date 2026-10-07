@@ -127,6 +127,17 @@ impl Agent {
             }
         }
 
+        // Tamper check: if the previous run's last lifecycle event was a startup (no matching
+        // clean AGENT_SHUTDOWN), the service was killed / force-stopped / power-lost — flag it.
+        if let Ok(Some(last)) = storage.last_lifecycle_event() {
+            if last == "AGENT_STARTUP" {
+                tracing::warn!("previous run did not shut down cleanly — possible tamper/forced stop");
+                let ev = lifecycle(&cfg.device_id, EventType::TamperSuspected);
+                let _ = storage.insert_activity_event(&ev);
+                let _ = storage.audit("TAMPER_SUSPECTED", Some("service"), Some("{\"reason\":\"unclean-previous-stop\"}"));
+            }
+        }
+
         storage.insert_activity_event(&lifecycle(&cfg.device_id, EventType::AgentStartup))?;
         storage.audit("AGENT_STARTUP", Some("service"), None)?;
 

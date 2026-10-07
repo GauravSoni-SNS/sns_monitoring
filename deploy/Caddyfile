@@ -1,0 +1,21 @@
+# SNS central server — TLS reverse proxy (Caddy). Caddy auto-obtains + renews Let's Encrypt
+# certs. Point your domain's DNS A record at this host first.
+#
+#   caddy run --config ./Caddyfile
+#
+# Replace sns.example.com with your domain. sns-server listens on 127.0.0.1:8080 (set
+# SNS_SERVER_BIND=127.0.0.1:8080) so only Caddy is exposed to the internet.
+
+sns.example.com {
+    encode gzip
+    reverse_proxy 127.0.0.1:8080
+    # Screenshots can be a few MB.
+    request_body {
+        max_size 20MB
+    }
+    header {
+        Strict-Transport-Security "max-age=31536000"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+    }
+}

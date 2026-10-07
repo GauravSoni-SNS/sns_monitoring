@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>SNS — Create your organization</title>
+<style>
+  :root{--ink:#16181d;--mut:#7c828d;--line:#e7e8ee;--cherry:#e12a4a;--cherry-deep:#c01f3d;--bg:#f6f7f9;--ok:#1a9e6b;--ok-soft:#e6f6ef;--bad:#d13030;--bad-soft:#fdeaea}
+  *{box-sizing:border-box}body{margin:0;font-family:"Segoe UI",system-ui,Arial,sans-serif;background:var(--bg);color:var(--ink)}
+  .card{max-width:440px;margin:7vh auto;background:#fff;border:1px solid var(--line);border-radius:14px;padding:28px}
+  h1{margin:0 0 4px;font-size:22px}.sub{color:var(--mut);font-size:13px}
+  label{display:block;font-size:12.5px;color:#3d4149;margin:16px 0 5px}
+  input{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:9px;font-size:14px}
+  button{width:100%;margin-top:20px;background:var(--cherry);color:#fff;border:0;border-radius:9px;padding:11px;font-size:14px;font-weight:600;cursor:pointer}
+  button:hover{background:var(--cherry-deep)}
+  .err{background:var(--bad-soft);color:var(--bad);border:1px solid var(--bad);border-radius:9px;padding:9px 12px;font-size:13px;margin-top:12px}
+  .ok{background:var(--ok-soft);color:var(--ok);border:1px solid var(--ok);border-radius:9px;padding:14px;margin-top:14px}
+  .tok{font-family:Consolas,monospace;font-size:12.5px;word-break:break-all;background:#fff;border:1px dashed var(--ok);border-radius:8px;padding:8px;margin-top:8px}
+  a{color:var(--cherry)}
+</style></head>
+<body><div class="card">
+  <h1>Create your organization</h1>
+  <div class="sub">Start a 14-day trial — 5 devices. You'll get an enroll token for your team's PCs.</div>
+  <div id="form">
+    <label>Business name</label><input id="org" placeholder="Acme Pvt Ltd"/>
+    <label>Admin email</label><input id="em" type="email" placeholder="boss@acme.com"/>
+    <label>Password (8+ chars)</label><input id="pw" type="password"/>
+    <button id="go">Create organization</button>
+    <div id="msg"></div>
+  </div>
+  <div id="done" style="display:none"></div>
+</div>
+<script>
+document.getElementById("go").onclick=async()=>{
+  const msg=document.getElementById("msg"); msg.innerHTML="";
+  const body={org_name:org.value,admin_email:em.value,admin_password:pw.value};
+  const r=await fetch("/api/v1/signup",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok){ msg.innerHTML=`<div class="err">${j.error||"signup failed"}</div>`; return; }
+  document.getElementById("form").style.display="none";
+  document.getElementById("done").style.display="block";
+  document.getElementById("done").innerHTML=
+    `<div class="ok"><b>Organization created.</b><br/>Save this device enroll token (shown once) — you'll use it to enroll each team PC:
+     <div class="tok">${j.enroll_token}</div></div>
+     <p class="sub" style="margin-top:14px">On each Windows PC, install the SNS agent, then run:<br/>
+     <code>sns-agentctl enroll --server &lt;this server URL&gt; --token &lt;token above&gt;</code></p>
+     <p><a href="/">Go to your dashboard →</a></p>`;
+};
+</script>
+</body></html>

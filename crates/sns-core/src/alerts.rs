@@ -164,6 +164,15 @@ pub fn evaluate(rules: &AlertRules, rows: &[ActivityRow]) -> Vec<Alert> {
                     event_id: r.event_id.clone(),
                 });
             }
+            "TAMPER_SUSPECTED" if rules.integrity_failure => {
+                out.push(Alert {
+                    severity: Severity::High,
+                    kind: "tamper".into(),
+                    message: "Agent stopped unexpectedly (forced stop / crash / power loss)".into(),
+                    timestamp_utc: r.timestamp_utc.clone(),
+                    event_id: r.event_id.clone(),
+                });
+            }
             "INTEGRITY_FAILURE" if rules.integrity_failure => {
                 out.push(Alert {
                     severity: Severity::High,
