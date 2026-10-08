@@ -2,18 +2,23 @@
 <html lang="en"><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>SNS — Create your organization</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
 <style>
-  :root{--ink:#16181d;--mut:#7c828d;--line:#e7e8ee;--cherry:#e12a4a;--cherry-deep:#c01f3d;--bg:#f6f7f9;--ok:#1a9e6b;--ok-soft:#e6f6ef;--bad:#d13030;--bad-soft:#fdeaea}
-  *{box-sizing:border-box}body{margin:0;font-family:"Segoe UI",system-ui,Arial,sans-serif;background:var(--bg);color:var(--ink)}
-  .card{max-width:440px;margin:7vh auto;background:#fff;border:1px solid var(--line);border-radius:14px;padding:28px}
-  h1{margin:0 0 4px;font-size:22px}.sub{color:var(--mut);font-size:13px}
-  label{display:block;font-size:12.5px;color:#3d4149;margin:16px 0 5px}
-  input{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:9px;font-size:14px}
-  button{width:100%;margin-top:20px;background:var(--cherry);color:#fff;border:0;border-radius:9px;padding:11px;font-size:14px;font-weight:600;cursor:pointer}
-  button:hover{background:var(--cherry-deep)}
-  .err{background:var(--bad-soft);color:var(--bad);border:1px solid var(--bad);border-radius:9px;padding:9px 12px;font-size:13px;margin-top:12px}
-  .ok{background:var(--ok-soft);color:var(--ok);border:1px solid var(--ok);border-radius:9px;padding:14px;margin-top:14px}
-  .tok{font-family:Consolas,monospace;font-size:12.5px;word-break:break-all;background:#fff;border:1px dashed var(--ok);border-radius:8px;padding:8px;margin-top:8px}
+  :root{--ink:#eceef5;--mut:#7a8099;--line:rgba(255,255,255,.09);--cherry:#8b7bff;--grad:linear-gradient(135deg,#7c6cff,#a855f7);--bg:#080910;--surf2:rgba(255,255,255,.06);--ok:#34d399;--ok-soft:rgba(52,211,153,.14);--bad:#fb7185;--bad-soft:rgba(251,113,133,.14)}
+  *{box-sizing:border-box}body{margin:0;font-family:"Inter",system-ui,Arial,sans-serif;color:var(--ink);-webkit-font-smoothing:antialiased;
+    background:radial-gradient(1000px 600px at 50% -10%,rgba(124,108,255,.2),transparent 60%),radial-gradient(800px 500px at 100% 100%,rgba(168,85,247,.12),transparent 55%),var(--bg);min-height:100vh}
+  .card{max-width:440px;margin:7vh auto;background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.02));backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border:1px solid var(--line);border-radius:22px;padding:32px;position:relative;overflow:hidden}
+  .card::before{content:"";position:absolute;top:0;left:0;right:0;height:3px;background:var(--grad)}
+  h1{margin:0 0 4px;font-size:23px;letter-spacing:-.02em}.sub{color:var(--mut);font-size:13px}
+  label{display:block;font-size:12.5px;color:#b6bacb;margin:16px 0 5px}
+  input{width:100%;padding:11px 13px;border:1px solid var(--line);border-radius:11px;font-size:14px;background:var(--surf2);color:var(--ink)}
+  input::placeholder{color:var(--mut)}
+  input:focus{outline:none;border-color:var(--cherry);box-shadow:0 0 0 3px rgba(124,108,255,.38)}
+  button{width:100%;margin-top:22px;background:var(--grad);color:#fff;border:0;border-radius:11px;padding:12px;font-size:14px;font-weight:600;cursor:pointer;box-shadow:0 6px 18px rgba(124,108,255,.3)}
+  button:hover{transform:translateY(-1px)}
+  .err{background:var(--bad-soft);color:var(--bad);border:1px solid var(--bad);border-radius:11px;padding:9px 12px;font-size:13px;margin-top:12px}
+  .ok{background:var(--ok-soft);color:var(--ok);border:1px solid var(--ok);border-radius:11px;padding:14px;margin-top:14px}
+  .tok{font-family:"JetBrains Mono",Consolas,monospace;font-size:12.5px;word-break:break-all;background:rgba(0,0,0,.3);border:1px dashed var(--ok);border-radius:8px;padding:8px;margin-top:8px;color:var(--ink)}
   a{color:var(--cherry)}
 </style></head>
 <body><div class="card">

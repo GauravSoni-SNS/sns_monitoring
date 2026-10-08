@@ -26,3 +26,12 @@ Thumbs.db
 
 # extracted duplicate of the zip (keep the zip + SNSSecurityAgent/ only)
 dist/SNSSecurityAgent-1.0.0/
+
+# local-only release bundles (regenerated; not committed)
+dist/SNS-Release/
+dist/SNS-Release.zip
+dist/SNS-latest/
+dist/SNS-latest.zip
+# server screenshot blob store / db dumps if ever created in-repo
+blobs/
+*.dump
