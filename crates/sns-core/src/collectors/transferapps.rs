@@ -84,7 +84,16 @@ pub fn scan_installed() -> Vec<TransferApp> {
 
 #[cfg(not(windows))]
 pub fn scan_installed() -> Vec<TransferApp> {
-    Vec::new()
+    let mut out: Vec<TransferApp> = Vec::new();
+    for name in crate::collectors::platform_unix::installed_app_names() {
+        if let Some(cat) = classify(&name) {
+            if !out.iter().any(|a| a.name.eq_ignore_ascii_case(&name)) {
+                out.push(TransferApp { name, category: cat.to_string() });
+            }
+        }
+    }
+    out.sort_by(|a, b| a.category.cmp(&b.category).then(a.name.cmp(&b.name)));
+    out
 }
 
 #[cfg(windows)]

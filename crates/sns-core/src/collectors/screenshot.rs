@@ -158,9 +158,29 @@ pub fn capture_monitor(monitor_id: u32, max_dimension: u32) -> Result<Vec<u8>> {
 }
 
 #[cfg(not(windows))]
-pub fn capture_monitor(_monitor_id: u32, _max_dimension: u32) -> Result<Vec<u8>> {
-    // Non-Windows dev builds have no display grab; scheduler skips on empty.
-    Ok(vec![])
+pub fn capture_monitor(_monitor_id: u32, max_dimension: u32) -> Result<Vec<u8>> {
+    // Linux/macOS: capture via the platform layer (grim/scrot/import or screencapture).
+    // Downscale to `max_dimension` through the same PNG re-encode path used on Windows.
+    let raw = crate::collectors::platform_unix::capture_screen_png(max_dimension);
+    if raw.is_empty() {
+        return Ok(Vec::new());
+    }
+    match image::load_from_memory(&raw) {
+        Ok(img) => {
+            let (w, h) = (img.width(), img.height());
+            let img = if w.max(h) > max_dimension && max_dimension > 0 {
+                let scale = max_dimension as f32 / w.max(h) as f32;
+                img.thumbnail((w as f32 * scale) as u32, (h as f32 * scale) as u32)
+            } else {
+                img
+            };
+            let mut out = Vec::new();
+            img.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+                .map_err(|_| CoreError::Storage("png encode failed".into()))?;
+            Ok(out)
+        }
+        Err(_) => Ok(raw), // store as-is if we can't re-encode
+    }
 }
 
 /// Convert a top-down BGRA framebuffer to RGBA, optionally downscale so the longest edge

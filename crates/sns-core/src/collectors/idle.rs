@@ -20,7 +20,7 @@ pub fn idle_seconds() -> u64 {
 
 #[cfg(not(windows))]
 pub fn idle_seconds() -> u64 {
-    0
+    crate::collectors::platform_unix::idle_seconds()
 }
 
 /// Pure idle/active state machine. Fed the current idle-seconds each tick; emits a state

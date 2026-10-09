@@ -297,6 +297,11 @@ pub async fn signup_page() -> Response {
     axum::response::Html(include_str!("signup.html")).into_response()
 }
 
+/// OS-detecting agent download page (Windows / macOS / Linux installers).
+pub async fn download_page() -> Response {
+    axum::response::Html(include_str!("download.html")).into_response()
+}
+
 // ---------------------------- screenshot ingest ----------------------------
 
 #[derive(Deserialize)]

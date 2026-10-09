@@ -55,7 +55,7 @@ pub fn list_usb_devices() -> Vec<UsbDeviceInfo> {
 
 #[cfg(not(windows))]
 pub fn list_usb_devices() -> Vec<UsbDeviceInfo> {
-    Vec::new()
+    crate::collectors::platform_unix::list_usb_devices()
 }
 
 /// Diff previous vs current removable set (keyed by drive letter).
@@ -75,7 +75,7 @@ pub fn list_removable() -> Vec<UsbDevice> {
 
 #[cfg(not(windows))]
 pub fn list_removable() -> Vec<UsbDevice> {
-    Vec::new()
+    crate::collectors::platform_unix::list_removable()
 }
 
 #[cfg(windows)]

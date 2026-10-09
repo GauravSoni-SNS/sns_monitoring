@@ -53,6 +53,7 @@ async fn serve(db: sqlx::PgPool) -> anyhow::Result<()> {
     let app = Router::new()
         .route("/", get(handlers::dashboard))
         .route("/signup", get(handlers::signup_page))
+        .route("/download", get(handlers::download_page))
         .route("/api/v1/healthz", get(handlers::healthz))
         .route("/api/v1/agent/version", get(handlers::agent_version))
         .route("/api/v1/signup", post(handlers::signup))

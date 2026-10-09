@@ -106,7 +106,7 @@ pub fn snapshot_removable() -> UsbSnapshot {
 
 #[cfg(not(windows))]
 pub fn snapshot_removable() -> UsbSnapshot {
-    UsbSnapshot::new()
+    crate::collectors::platform_unix::snapshot_removable_files()
 }
 
 #[cfg(windows)]

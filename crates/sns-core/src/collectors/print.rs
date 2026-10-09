@@ -73,7 +73,7 @@ pub fn current_jobs() -> Vec<PrintJob> {
 
 #[cfg(not(windows))]
 pub fn current_jobs() -> Vec<PrintJob> {
-    Vec::new()
+    crate::collectors::platform_unix::current_print_jobs()
 }
 
 #[cfg(windows)]

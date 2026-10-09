@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>SNS — Install the agent</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
+<style>
+  :root{--ink:#eceef5;--mut:#7a8099;--line:rgba(255,255,255,.09);--cherry:#8b7bff;--grad:linear-gradient(135deg,#7c6cff,#a855f7);--bg:#080910;--surf2:rgba(255,255,255,.06)}
+  *{box-sizing:border-box}body{margin:0;font-family:"Inter",system-ui,Arial,sans-serif;color:var(--ink);-webkit-font-smoothing:antialiased;
+    background:radial-gradient(1000px 600px at 50% -10%,rgba(124,108,255,.2),transparent 60%),var(--bg);min-height:100vh}
+  .wrap{max-width:720px;margin:0 auto;padding:48px 20px}
+  h1{font-size:28px;letter-spacing:-.02em;margin:0 0 6px}.sub{color:var(--mut);margin:0 0 28px}
+  .os{display:flex;gap:10px;margin-bottom:22px;flex-wrap:wrap}
+  .os button{background:var(--surf2);color:var(--ink);border:1px solid var(--line);border-radius:12px;padding:10px 18px;font-weight:600;cursor:pointer}
+  .os button.active{background:var(--grad);border:none;box-shadow:0 6px 18px rgba(124,108,255,.3)}
+  .card{background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.02));border:1px solid var(--line);border-radius:18px;padding:26px;backdrop-filter:blur(14px)}
+  .dl{display:inline-block;background:var(--grad);color:#fff;text-decoration:none;border-radius:12px;padding:12px 22px;font-weight:600;box-shadow:0 6px 18px rgba(124,108,255,.3);margin:6px 0 18px}
+  code{background:rgba(0,0,0,.35);border:1px solid var(--line);border-radius:7px;padding:2px 7px;font-family:"JetBrains Mono",monospace;font-size:12.5px;color:#cfc7ff}
+  pre{background:rgba(0,0,0,.35);border:1px solid var(--line);border-radius:10px;padding:14px;overflow:auto;font-size:12.5px;color:#d7d9e4}
+  h3{margin:0 0 6px}.step{color:var(--mut);font-size:13px;margin:0 0 14px}
+</style></head>
+<body><div class="wrap">
+  <h1>Install the SNS agent</h1>
+  <p class="sub">We detected your system. Pick an OS if it's wrong. Authorized company-managed devices only, under a disclosed monitoring policy.</p>
+  <div class="os">
+    <button data-os="windows">Windows</button>
+    <button data-os="macos">macOS</button>
+    <button data-os="linux">Linux</button>
+  </div>
+  <div class="card" id="panel"></div>
+</div>
+<script>
+const P = {
+  windows: {
+    title: "Windows 10 / 11",
+    file: "/downloads/SNSSecurityAgent-windows.zip",
+    body: `<a class="dl" href="/downloads/SNSSecurityAgent-windows.zip">Download for Windows (.zip)</a>
+      <h3>Install</h3><p class="step">Extract, then double-click <code>Install.cmd</code> (click Yes on the UAC prompt). Enter a system name + panel password.</p>
+      <h3>Connect to this server</h3><p class="step">Elevated PowerShell:</p>
+      <pre>& "C:\\Program Files\\SNS\\SecurityAgent\\sns-agentctl.exe" enroll --server ${location.origin} --token &lt;enroll-token&gt;</pre>` },
+  macos: {
+    title: "macOS",
+    file: "/downloads/SNSSecurityAgent-macos.tar.gz",
+    body: `<a class="dl" href="/downloads/SNSSecurityAgent-macos.tar.gz">Download for macOS (.tar.gz)</a>
+      <h3>Install</h3><pre>tar xzf SNSSecurityAgent-macos.tar.gz &amp;&amp; cd SNSSecurityAgent
+sudo ./install-macos.sh --server ${location.origin} --token &lt;enroll-token&gt;</pre>
+      <h3>Grant permission (required)</h3><p class="step">macOS will ask you to allow <b>Screen Recording</b> and <b>Accessibility</b> for the SNS agent — the installer opens those Settings panes. Capture starts once granted.</p>` },
+  linux: {
+    title: "Linux",
+    file: "/downloads/SNSSecurityAgent-linux.tar.gz",
+    body: `<a class="dl" href="/downloads/SNSSecurityAgent-linux.tar.gz">Download for Linux (.tar.gz)</a>
+      <h3>Install</h3><pre>tar xzf SNSSecurityAgent-linux.tar.gz &amp;&amp; cd SNSSecurityAgent
+sudo ./install-linux.sh --server ${location.origin} --token &lt;enroll-token&gt;</pre>
+      <h3>Note</h3><p class="step">Installs as systemd user services. On <b>Wayland</b> you may be prompted to allow screen capture; X11 works out of the box.</p>` },
+};
+function pick(os){
+  document.querySelectorAll('.os button').forEach(b=>b.classList.toggle('active', b.dataset.os===os));
+  const p=P[os]; document.getElementById('panel').innerHTML = `<h2 style="margin:0 0 14px">${p.title}</h2>`+p.body;
+}
+document.querySelectorAll('.os button').forEach(b=>b.onclick=()=>pick(b.dataset.os));
+const ua=navigator.userAgent.toLowerCase();
+pick(ua.includes('win')?'windows':(ua.includes('mac')?'macos':'linux'));
+</script>
+</body></html>

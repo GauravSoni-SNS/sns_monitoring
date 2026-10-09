@@ -81,7 +81,7 @@ pub fn foreground_sample() -> Option<ForegroundSample> {
 
 #[cfg(not(windows))]
 pub fn foreground_sample() -> Option<ForegroundSample> {
-    None
+    crate::collectors::platform_unix::foreground_sample()
 }
 
 #[cfg(windows)]
