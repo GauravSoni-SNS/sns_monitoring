@@ -1,0 +1,6 @@
+# Shell scripts must use LF — CRLF breaks the shebang on Linux/macOS.
+*.sh text eol=lf
+installer/unix/* text eol=lf
+# Keep Windows scripts CRLF.
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
