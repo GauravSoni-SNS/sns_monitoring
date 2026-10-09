@@ -16,6 +16,7 @@ runs anywhere; only the **agent** has per-OS capture code.
 | Feature | Windows | macOS | Linux |
 |---|---|---|---|
 | Foreground app + window title | Win32 | AppleScript/AX | xdotool (X11) |
+| Browser URL / domain | UI Automation | AppleScript (Safari/Chrome/Edge/Brave) | ⚠️ no reliable address-bar read without a browser extension/AT-SPI — degrades to none |
 | Idle time | GetLastInputInfo | ioreg HIDIdleTime | xprintidle (X11) |
 | Screenshots | GDI | `screencapture` | grim (Wayland) / scrot / import |
 | USB device identity | SetupDi | system_profiler | lsusb |

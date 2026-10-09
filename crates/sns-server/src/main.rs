@@ -66,6 +66,8 @@ async fn serve(db: sqlx::PgPool) -> anyhow::Result<()> {
         .route("/api/v1/admin/events", get(handlers::admin_events))
         .route("/api/v1/admin/screenshots", get(handlers::admin_screenshots))
         .route("/api/v1/admin/screenshots/:id/image", get(handlers::admin_screenshot_image))
+        // Serve the agent install bundles the /download page links to (SNS_DOWNLOAD_DIR).
+        .nest_service("/downloads", tower_http::services::ServeDir::new(env("SNS_DOWNLOAD_DIR", "downloads")))
         // Screenshots can be a few MB; allow up to 16 MB request bodies.
         .layer(axum::extract::DefaultBodyLimit::max(16 * 1024 * 1024))
         .with_state(state);

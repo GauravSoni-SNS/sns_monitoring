@@ -76,6 +76,36 @@ pub fn foreground_sample() -> Option<ForegroundSample> {
     }
 }
 
+// ============================== browser URL =================================
+
+/// The URL/domain shown in the foreground browser's address bar (on-screen only; never
+/// history/stores). macOS: AppleScript reads the active tab URL (needs Automation permission).
+/// Linux: no reliable address-bar read without a browser extension/AT-SPI — returns None
+/// (degrades; the window-title fallback is intentionally not used, as a title is not a URL).
+pub fn foreground_browser_url() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        let app = foreground_sample()?.process_name.to_ascii_lowercase();
+        let script: String = if app.contains("safari") {
+            "tell application \"Safari\" to get URL of front document".to_string()
+        } else if app.contains("chrome") || app.contains("chromium") || app.contains("brave") || app.contains("edge") {
+            let name = if app.contains("edge") { "Microsoft Edge" }
+                else if app.contains("brave") { "Brave Browser" }
+                else if app.contains("chromium") { "Chromium" }
+                else { "Google Chrome" };
+            format!("tell application \"{name}\" to get URL of active tab of front window")
+        } else {
+            return None;
+        };
+        let url = cmd("osascript", &["-e", &script])?;
+        if url.is_empty() { None } else { Some(url) }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
+}
+
 // =================================== idle ====================================
 
 /// Seconds since the last user input (keyboard/mouse). 0 if unavailable (treated as active).

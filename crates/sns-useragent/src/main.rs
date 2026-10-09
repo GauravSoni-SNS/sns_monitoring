@@ -16,10 +16,11 @@
 // developers still see stderr/`Error:` output when running it by hand.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use sns_core::collectors::application::{self, ApplicationCollector};
 use sns_core::collectors::browser::{BrowserCollector, Granularity};
@@ -76,6 +77,15 @@ fn main() -> anyhow::Result<()> {
         let browser = BrowserCollector::new(&cfg.device_id, granularity);
         let mut idle = idle::IdleTracker::new();
 
+        // Browser-extension reporter: a loopback listener receives active-tab URLs from the
+        // SNS browser extension (reliable, cross-browser — esp. Linux). `last_ext` tracks the
+        // last report so the OS-native reader (UIA/AppleScript) is skipped while the extension
+        // is active, avoiding double-counting.
+        let last_ext = Arc::new(AtomicU64::new(0));
+        if policy.browser.enabled {
+            start_browser_receiver(root.clone(), cfg.device_id.clone(), granularity, last_ext.clone());
+        }
+
         // Exfil watch (metadata only). USB file snapshot baselined so pre-existing files are
         // not reported as "copied"; only files written after start fire events.
         let mut usb_snapshot = usbfiles::snapshot_removable();
@@ -91,7 +101,8 @@ fn main() -> anyhow::Result<()> {
         while !shutdown.load(Ordering::Relaxed) {
             // Foreground application (and browser, if the foreground is a browser).
             if policy.application.enabled {
-                sample_apps(&root, &policy, &mut app, &browser);
+                let ext_active = now_secs().saturating_sub(last_ext.load(Ordering::Relaxed)) < 10;
+                sample_apps(&root, &policy, &mut app, &browser, ext_active);
             }
 
             // Idle / active transitions (coarse presence; reads time-of-last-input only).
@@ -136,6 +147,7 @@ fn sample_apps(
     policy: &Policy,
     app: &mut ApplicationCollector,
     browser: &BrowserCollector,
+    ext_active: bool,
 ) {
     let Some(sample) = application::foreground_sample() else { return };
     let browser_name = application::is_browser_process(&sample.process_name);
@@ -155,7 +167,9 @@ fn sample_apps(
     // that is currently visible), never history recovery or private-store reading. Falls
     // back to nothing if the address bar is unreadable (we do not record page titles as
     // sites, since a title is not a URL).
-    if changed && policy.browser.enabled {
+    // Skip the OS-native address-bar read when the browser extension is actively reporting
+    // (the extension is the reliable source; the receiver thread emits those events).
+    if changed && policy.browser.enabled && !ext_active {
         if let Some(bname) = browser_name {
             if let Some(url) = sns_core::collectors::browser::foreground_browser_url() {
                 let ev = browser.build_event(bname, &url);
@@ -166,6 +180,53 @@ fn sample_apps(
             }
         }
     }
+}
+
+fn now_secs() -> u64 {
+    SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+/// Loopback listener for the SNS browser extension. Accepts `POST /url` with a JSON body
+/// `{"url":"...","browser":"..."}` from the extension and drops a BROWSER_ACTIVITY record.
+/// Bound to 127.0.0.1 only; ignores anything that isn't a small local POST. Updates
+/// `last_ext` so the native reader stands down while the extension is active.
+fn start_browser_receiver(
+    root: PathBuf,
+    device_id: String,
+    granularity: Granularity,
+    last_ext: Arc<AtomicU64>,
+) {
+    std::thread::spawn(move || {
+        let listener = match std::net::TcpListener::bind("127.0.0.1:7738") {
+            Ok(l) => l,
+            Err(e) => {
+                tracing::warn!(error = %e, "browser receiver: bind 127.0.0.1:7738 failed");
+                return;
+            }
+        };
+        let browser = BrowserCollector::new(&device_id, granularity);
+        for stream in listener.incoming() {
+            let Ok(mut s) = stream else { continue };
+            let mut buf = [0u8; 8192];
+            let n = s.read(&mut buf).unwrap_or(0);
+            // Minimal CORS/OK reply so the extension's fetch resolves.
+            let _ = s.write_all(b"HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: 0\r\n\r\n");
+            if n == 0 {
+                continue;
+            }
+            let req = String::from_utf8_lossy(&buf[..n]);
+            let Some(body) = req.split("\r\n\r\n").nth(1) else { continue };
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(body.trim_matches('\0').trim()) else { continue };
+            let Some(url) = v.get("url").and_then(|u| u.as_str()) else { continue };
+            let bname = v.get("browser").and_then(|b| b.as_str()).unwrap_or("browser");
+            last_ext.store(now_secs(), Ordering::Relaxed);
+            let ev = browser.build_event(bname, url);
+            let stem = ev.event_id.clone();
+            if let Err(e) = dropbox::write_record(&root, &stem, &DropRecord::Activity(ev)) {
+                tracing::warn!(error = %e, "failed to drop extension browser record");
+            }
+        }
+    });
 }
 
 /// Sample idle time and, on a state flip (active↔idle past the policy threshold), drop a

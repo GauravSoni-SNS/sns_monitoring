@@ -1,0 +1,9 @@
+{
+  "manifest_version": 3,
+  "name": "SNS Endpoint Security — Browser Reporter",
+  "version": "1.0.0",
+  "description": "Reports the active tab's URL to the locally-installed SNS agent on company-managed devices (disclosed monitoring).",
+  "permissions": ["tabs"],
+  "host_permissions": ["http://127.0.0.1/*"],
+  "background": { "service_worker": "background.js" }
+}

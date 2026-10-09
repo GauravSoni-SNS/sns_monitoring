@@ -77,7 +77,7 @@ pub fn foreground_browser_url() -> Option<String> {
 
 #[cfg(not(windows))]
 pub fn foreground_browser_url() -> Option<String> {
-    None
+    crate::collectors::platform_unix::foreground_browser_url()
 }
 
 /// Heuristic: does this address-bar value look like a site (URL/host) rather than a typed
